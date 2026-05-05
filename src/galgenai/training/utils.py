@@ -20,11 +20,15 @@ def extract_batch_data(
         Tuple of (data, ivar, mask). ivar and mask may be None.
     """
     if isinstance(batch, (tuple, list)):
-        data = batch[0].to(device)
-        ivar = batch[1].to(device) if len(batch) > 1 else None
-        mask = batch[2].to(device) if len(batch) > 2 else None
+        data = batch[0].to(device, non_blocking=True)
+        ivar = (
+            batch[1].to(device, non_blocking=True) if len(batch) > 1 else None
+        )
+        mask = (
+            batch[2].to(device, non_blocking=True) if len(batch) > 2 else None
+        )
     else:
-        data = batch.to(device)
+        data = batch.to(device, non_blocking=True)
         ivar = None
         mask = None
     return data, ivar, mask
