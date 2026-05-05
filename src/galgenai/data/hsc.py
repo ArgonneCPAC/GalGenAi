@@ -126,17 +126,25 @@ def get_dataset_and_loaders(
 
     dataset_train, dataset_test = random_split(dataset, [split, 1 - split])
 
+    persistent = num_workers > 0
+    prefetch = num_workers * 4 if num_workers > 0 else None
     train_loader = DataLoader(
         dataset_train,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=True,
+        pin_memory=True,
+        persistent_workers=persistent,
+        prefetch_factor=prefetch,
     )
     test_loader = DataLoader(
         dataset_test,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=False,
+        pin_memory=True,
+        persistent_workers=persistent,
+        prefetch_factor=prefetch,
     )
 
     return dataset, train_loader, test_loader
