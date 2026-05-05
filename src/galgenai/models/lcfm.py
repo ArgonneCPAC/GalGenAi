@@ -604,10 +604,13 @@ class LCFM(nn.Module):
         loss = flow_loss + self.beta * kl_loss
 
         if return_components:
+            # Return detached tensors. The trainer calls .item() once
+            # after backward+step so the host-device sync happens at a
+            # single point, not three times before backward runs.
             return loss, {
-                "flow_loss": flow_loss.item(),
-                "kl_loss": kl_loss.item(),
-                "total_loss": loss.item(),
+                "flow_loss": flow_loss.detach(),
+                "kl_loss": kl_loss.detach(),
+                "total_loss": loss.detach(),
             }
         return loss
 

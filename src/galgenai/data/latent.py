@@ -101,18 +101,23 @@ def precompute_latents(
     for batch in loader:
         # Handle both 2-tuple and 4-tuple formats
         # flux is always first, condition is always last
-        images = batch[0].to(device)
+        images = batch[0].to(device, non_blocking=True)
         cond = batch[-1]
 
         mu, logvar = encoder(images)
-        all_mu.append(mu.cpu())
-        all_logvar.append(logvar.cpu())
-        all_cond.append(cond.cpu())
+        # Keep on device; copy to CPU once after the loop. Avoids a
+        # host-device sync on every batch. Latents are tiny
+        # (latent_dim ~ 32), so accumulating on GPU is cheap.
+        all_mu.append(mu)
+        all_logvar.append(logvar)
+        all_cond.append(cond)
 
-    # Concatenate all batches
-    mu = torch.cat(all_mu, dim=0)
-    logvar = torch.cat(all_logvar, dim=0)
+    # Concatenate all batches and move to CPU for caching
+    mu = torch.cat(all_mu, dim=0).cpu()
+    logvar = torch.cat(all_logvar, dim=0).cpu()
     conditions = torch.cat(all_cond, dim=0)
+    if conditions.is_cuda:
+        conditions = conditions.cpu()
 
     print(f"Computed {len(mu)} latents")
 
