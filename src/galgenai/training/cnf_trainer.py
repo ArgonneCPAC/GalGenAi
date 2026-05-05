@@ -97,12 +97,16 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
             Dictionary with loss metrics
         """
         latents, conditions = batch
-        latents = latents.to(self.device)
-        conditions = conditions.to(self.device)
+        latents = latents.to(self.device, non_blocking=True)
+        conditions = conditions.to(self.device, non_blocking=True)
 
-        # Compute negative log-likelihood loss
-        log_probs = self.model.log_prob(latents, conditions)
-        nll_loss = -log_probs.mean()
+        # Forward under autocast on CUDA. Note: the CNF log-det term can
+        # accumulate precision error in low precision. bf16 keeps fp32
+        # exponent range, but if log-det stability becomes an issue,
+        # disable by overriding _autocast_ctx in this subclass.
+        with self._autocast_ctx():
+            log_probs = self.model.log_prob(latents, conditions)
+            nll_loss = -log_probs.mean()
 
         # Backward pass
         self.optimizer.zero_grad()
@@ -144,11 +148,12 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
 
         for batch in self.val_loader:
             latents, conditions = batch
-            latents = latents.to(self.device)
-            conditions = conditions.to(self.device)
+            latents = latents.to(self.device, non_blocking=True)
+            conditions = conditions.to(self.device, non_blocking=True)
 
-            log_probs = self.model.log_prob(latents, conditions)
-            nll = -log_probs.mean()
+            with self._autocast_ctx():
+                log_probs = self.model.log_prob(latents, conditions)
+                nll = -log_probs.mean()
 
             total_nll += nll.item()
             total_log_prob += log_probs.mean().item()
@@ -179,7 +184,7 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         loader = self.val_loader if self.val_loader else self.train_loader
         batch = next(iter(loader))
         _, conditions = batch
-        conditions = conditions.to(self.device)
+        conditions = conditions.to(self.device, non_blocking=True)
 
         # Take subset of conditions
         conditions = conditions[:num_samples]
@@ -208,8 +213,8 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         # Get a batch from training data
         batch = next(iter(self.train_loader))
         latents, conditions = batch
-        latents = latents.to(self.device)
-        conditions = conditions.to(self.device)
+        latents = latents.to(self.device, non_blocking=True)
+        conditions = conditions.to(self.device, non_blocking=True)
 
         # Compute log determinants
         _, log_dets = self.model.forward(latents, conditions)

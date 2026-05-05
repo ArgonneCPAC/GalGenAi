@@ -48,20 +48,19 @@ class VAETrainer(BaseTrainer[VAETrainingConfig]):
         """Execute single VAE training step."""
         data, ivar, mask = extract_batch_data(batch, self.device)
 
-        # Forward pass
-        reconstruction, mu, logvar = self.model(data)
-
-        # Compute loss
-        total_loss, recon_loss, kl_loss = vae_loss(
-            reconstruction,
-            data,
-            mu,
-            logvar,
-            reconstruction_loss_fn=self.config.reconstruction_loss_fn,
-            beta=self.config.beta,
-            ivar=ivar,
-            mask=mask,
-        )
+        # Forward + loss under autocast on CUDA (bf16, no GradScaler).
+        with self._autocast_ctx():
+            reconstruction, mu, logvar = self.model(data)
+            total_loss, recon_loss, kl_loss = vae_loss(
+                reconstruction,
+                data,
+                mu,
+                logvar,
+                reconstruction_loss_fn=self.config.reconstruction_loss_fn,
+                beta=self.config.beta,
+                ivar=ivar,
+                mask=mask,
+            )
 
         # Normalize by batch size
         batch_size = data.size(0)
@@ -135,18 +134,18 @@ class VAETrainer(BaseTrainer[VAETrainingConfig]):
 
         for batch in self.val_loader:
             data, ivar, mask = extract_batch_data(batch, self.device)
-            reconstruction, mu, logvar = self.model(data)
-
-            total_loss, recon_loss, kl_loss = vae_loss(
-                reconstruction,
-                data,
-                mu,
-                logvar,
-                reconstruction_loss_fn=self.config.reconstruction_loss_fn,
-                beta=self.config.beta,
-                ivar=ivar,
-                mask=mask,
-            )
+            with self._autocast_ctx():
+                reconstruction, mu, logvar = self.model(data)
+                total_loss, recon_loss, kl_loss = vae_loss(
+                    reconstruction,
+                    data,
+                    mu,
+                    logvar,
+                    reconstruction_loss_fn=self.config.reconstruction_loss_fn,
+                    beta=self.config.beta,
+                    ivar=ivar,
+                    mask=mask,
+                )
 
             batch_size = data.size(0)
             total_loss_sum += (total_loss / batch_size).item()
@@ -183,7 +182,7 @@ class VAETrainer(BaseTrainer[VAETrainingConfig]):
         # first epoch.
         warmup_batch = next(iter(self.train_loader))
         data, _, _ = extract_batch_data(warmup_batch, self.device)
-        with torch.no_grad():
+        with torch.no_grad(), self._autocast_ctx():
             self.model(data)
 
         start_epoch = self.current_epoch + 1

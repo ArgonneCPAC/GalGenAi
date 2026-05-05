@@ -1,6 +1,7 @@
 """Abstract base trainer class."""
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, Generic, List, Optional, TypeVar
 
@@ -103,6 +104,20 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), self.config.max_grad_norm
         )
+
+    def _autocast_ctx(self):
+        """
+        Mixed-precision context manager.
+
+        bf16 autocast on CUDA: ~1.5-2x speedup on Ampere+ at no quality
+        cost, no GradScaler needed (bf16 has fp32-equivalent exponent
+        range). No-op on MPS/CPU where the gain is not reliable.
+        """
+        if self.device.type == "cuda":
+            return torch.amp.autocast(
+                device_type="cuda", dtype=torch.bfloat16
+            )
+        return nullcontext()
 
     def _get_current_lr(self) -> float:
         """Get current learning rate from optimizer."""

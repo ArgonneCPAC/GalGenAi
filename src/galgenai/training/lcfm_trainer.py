@@ -85,10 +85,11 @@ class LCFMTrainer(BaseTrainer[LCFMTrainingConfig]):
         """Execute single LCFM training step."""
         x, ivar, mask = extract_batch_data(batch, self.device)
 
-        # Compute loss using model method
-        loss, loss_dict = self.model.compute_loss(
-            x, ivar=ivar, mask=mask, return_components=True
-        )
+        # Forward + loss under autocast on CUDA (bf16, no GradScaler).
+        with self._autocast_ctx():
+            loss, loss_components = self.model.compute_loss(
+                x, ivar=ivar, mask=mask, return_components=True
+            )
 
         # Backward pass
         self.optimizer.zero_grad()
@@ -106,8 +107,13 @@ class LCFMTrainer(BaseTrainer[LCFMTrainingConfig]):
         ):
             self.scheduler.step()
 
-        loss_dict["lr"] = current_lr
-        return loss_dict
+        # Sync once, after step. compute_loss returned detached tensors.
+        return {
+            "flow_loss": loss_components["flow_loss"].item(),
+            "kl_loss": loss_components["kl_loss"].item(),
+            "total_loss": loss_components["total_loss"].item(),
+            "lr": current_lr,
+        }
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
@@ -123,13 +129,14 @@ class LCFMTrainer(BaseTrainer[LCFMTrainingConfig]):
 
         for batch in self.val_loader:
             x, ivar, mask = extract_batch_data(batch, self.device)
-            _, loss_dict = self.model.compute_loss(
-                x, ivar=ivar, mask=mask, return_components=True
-            )
+            with self._autocast_ctx():
+                _, loss_components = self.model.compute_loss(
+                    x, ivar=ivar, mask=mask, return_components=True
+                )
 
-            total_flow_loss += loss_dict["flow_loss"]
-            total_kl_loss += loss_dict["kl_loss"]
-            total_total_loss += loss_dict["total_loss"]
+            total_flow_loss += loss_components["flow_loss"].item()
+            total_kl_loss += loss_components["kl_loss"].item()
+            total_total_loss += loss_components["total_loss"].item()
             num_batches += 1
 
         self.model.train()
