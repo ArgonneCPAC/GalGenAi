@@ -37,6 +37,11 @@ from galgenai.data.normalization import (
 from galgenai import get_device
 from galgenai.config import load_config
 
+# CUDA-wide perf knobs: TF32 matmuls + cuDNN autotune for static shapes.
+# No-ops on non-CUDA backends. Must be set before the first CUDA op.
+torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.benchmark = True
+
 
 def parse_args():
     parser = argparse.ArgumentParser(

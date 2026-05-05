@@ -46,7 +46,12 @@ from galgenai.training import (
     VAETrainer,
     load_vae_training_config,
     load_cnf_training_config,
-)   
+)
+
+# CUDA-wide perf knobs: TF32 matmuls + cuDNN autotune for static shapes.
+# No-ops on non-CUDA backends. Must be set before the first CUDA op.
+torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.benchmark = True
 
 
 def parse_args() -> argparse.Namespace:
