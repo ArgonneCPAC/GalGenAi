@@ -109,11 +109,14 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         """
         Mixed-precision context manager.
 
-        bf16 autocast on CUDA: ~1.5-2x speedup on Ampere+ at no quality
-        cost, no GradScaler needed (bf16 has fp32-equivalent exponent
-        range). No-op on MPS/CPU where the gain is not reliable.
+        bf16 autocast on Ampere+ (sm_80+): ~1.5-2x speedup at no
+        quality cost, no GradScaler needed (bf16 has fp32-equivalent
+        exponent range).
         """
-        if self.device.type == "cuda":
+        if (
+            self.device.type == "cuda"
+            and torch.cuda.is_bf16_supported(including_emulation=False)
+        ):
             return torch.amp.autocast(
                 device_type="cuda", dtype=torch.bfloat16
             )
