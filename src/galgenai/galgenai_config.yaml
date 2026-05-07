@@ -148,6 +148,9 @@ training:
     num_blocks: 8
     hidden_dim: 256
     num_sample_latents: 64
+    sample_every: 1000
+    validate_every: 1000
+    save_every: 5000
     log_every: 100
     condition_cols:
     - mag_model_hsc-g
