@@ -175,7 +175,7 @@ training:
     lambda1: 8.0e-02
     lambda2: 1.0e-02
     K: 2
-    tau_sq: null
+    tau_sq: 1.0
     condition_cols:
     - mag_model_hsc-g
     - mag_model_hsc-r

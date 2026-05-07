@@ -146,7 +146,7 @@ def main():
     n_total = len(dataset_raw)
     n_train = int(n_total * train_ratio)
     n_val = int(n_total * val_ratio)
-    n_test = int(n_total * (1 - train_ratio - val_ratio))
+    n_test = n_total - n_train - n_val
     print(
         f"Dataset sizes: {n_train} train / {n_val} val "
         f"/ {n_test} test (total: {n_total})"
