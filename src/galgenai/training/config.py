@@ -87,8 +87,12 @@ class CNFTrainingConfig(BaseTrainingConfig):
     sample_every: int = 5000
     num_sample_latents: int = 64
 
-    # Validation
+    # Validation (should be a multiple of log_every)
     validate_every: int = 500
+
+    # Override defaults for step-based training
+    log_every: int = 100
+    save_every: int = 5_000
 
 
 # ============================================================================

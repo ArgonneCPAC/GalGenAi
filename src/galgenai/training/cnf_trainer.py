@@ -278,32 +278,34 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
                 }
             )
 
-            # Periodic validation and logging
-            if self.global_step % self.config.validate_every == 0:
+            # Periodic logging (for metrics tracking, not display)
+            if self.global_step % self.config.log_every == 0:
                 avg_metrics = {
                     "nll_loss": running_nll / log_steps,
                     "avg_log_prob": running_log_prob / log_steps,
                     "lr": loss_dict["lr"],
                 }
 
-                # Run validation
-                val_metrics = self.validate()
-                if val_metrics:
-                    pbar.write(
-                        f"  Step {self.global_step} Validation"
-                        f" - NLL: {val_metrics['val_nll_loss']:.3e}"
-                        f", Log P: {val_metrics['val_avg_log_prob']:.3f}"
-                    )
-                    avg_metrics.update(val_metrics)
+                # Validation
+                val_metrics = {}
+                if self.global_step % self.config.validate_every == 0:
+                    val_metrics = self.validate()
+                    if val_metrics:
+                        pbar.write(
+                            f"  Step {self.global_step} Val"
+                            f" - NLL: {val_metrics['val_nll_loss']:.3e}"
+                            f", Log P: {val_metrics['val_avg_log_prob']:.3f}"
+                        )
+                        avg_metrics.update(val_metrics)
 
-                # Also log determinant statistics
-                log_det_stats = self.compute_log_det_statistics()
-                pbar.write(
-                    f"  Log det Jacobian: "
-                    f"mean={log_det_stats['log_det_mean']:.2f}, "
-                    f"std={log_det_stats['log_det_std']:.2f}"
-                )
-                avg_metrics.update(log_det_stats)
+                    # Also log determinant statistics during validation
+                    log_det_stats = self.compute_log_det_statistics()
+                    pbar.write(
+                        f"  Log det Jacobian: "
+                        f"mean={log_det_stats['log_det_mean']:.2f}, "
+                        f"std={log_det_stats['log_det_std']:.2f}"
+                    )
+                    avg_metrics.update(log_det_stats)
 
                 self._log_metrics(avg_metrics)
 

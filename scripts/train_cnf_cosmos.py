@@ -266,6 +266,7 @@ def main():
 
     # ---- Load frozen encoder from VAE checkpoint ----------------
     vae_ckpt_path = output_dir / "vae" / "checkpoints" / "best.pt"
+    print(f"loading vae from {vae_ckpt_path}")
     if not vae_ckpt_path.exists():
         raise FileNotFoundError(
             f"No VAE checkpoint found at {vae_ckpt_path}. "
