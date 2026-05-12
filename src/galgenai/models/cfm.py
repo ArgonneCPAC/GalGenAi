@@ -124,7 +124,7 @@ class AttentionBlock(nn.Module):
         self.proj = nn.Conv2d(channels, channels, 1)
 
     def forward(
-        self, x: torch.Tensor, cond: torch.Tensor = None
+        self, x: torch.Tensor, cond: torch.Tensor[Optional] = None
     ) -> torch.Tensor:
         """
         Args:
@@ -434,13 +434,6 @@ class CFM(nn.Module):
         self.input_size = input_size
         self.beta = beta
 
-        # Validate that expected trainable layers exist
-        trainable_names = [
-            name
-            for name, p in self.vae_encoder.named_parameters()
-            if p.requires_grad
-        ]
-
         # Trainable components
         self.velocity_net = VelocityUNet(
             in_channels=in_channels,
@@ -450,36 +443,22 @@ class CFM(nn.Module):
             **unet_kwargs,
         )
 
-    def train(self, mode: bool = True):
-        """
-        Override train() to keep encoder in eval mode.
-
-        The encoder backbone uses BatchNorm which would update running
-        statistics during training if in training mode. We want the
-        frozen encoder to behave consistently.
-        """
-        super().train(mode)
-        self.vae_encoder.eval()  # Always keep encoder in eval mode
-        return self
-
     def compute_loss(
         self,
         x1: torch.Tensor,
+        f: torch.Tensor,
         ivar: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
-        return_components: bool = False,
     ) -> torch.Tensor:
         """
         Compute LCFM training loss.
 
         Args:
             x1: (batch, channels, H, W) real images from dataset
-            return_components: if True, also return individual loss
-                terms
+            x1: (batch, cond_dim)
 
         Returns:
             loss: scalar loss value
-            (optional) dict with 'flow_loss' and 'kl_loss'
         """
         batch_size = x1.shape[0]
         device = x1.device
@@ -496,7 +475,7 @@ class CFM(nn.Module):
         x_t = (1 - t_broadcast) * x0 + t_broadcast * x1
 
         # 5. Target velocity (constant along straight path)
-        u_t = x1 - x0
+        u_t = x1 - x0  # ????????????????/
 
         # 6. Predict velocity
         v_pred = self.velocity_net(x_t, f, t)
@@ -514,16 +493,13 @@ class CFM(nn.Module):
         # 9. Total loss
         loss = flow_loss
 
-        if return_components:
-            return loss, {
-                "flow_loss": flow_loss.item(),
-            }
         return loss
 
     @torch.no_grad()
     def sample(
         self,
-        x_train: torch.Tensor,
+        batch_size: int,
+        device,
         f: torch.Tensor,
         num_steps: int = 50,
         return_trajectory: bool = False,
@@ -543,9 +519,6 @@ class CFM(nn.Module):
             (optional) trajectory: list of intermediate states
         """
         self.eval()
-
-        batch_size = x_train.shape[0]
-        device = x_train.device
 
         # Start from noise
         x = torch.randn(
