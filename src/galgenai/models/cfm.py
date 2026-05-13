@@ -124,7 +124,7 @@ class AttentionBlock(nn.Module):
         self.proj = nn.Conv2d(channels, channels, 1)
 
     def forward(
-        self, x: torch.Tensor, cond: torch.Tensor[Optional] = None
+        self, x: torch.Tensor, cond: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Args:
@@ -174,8 +174,9 @@ class VelocityUNet(nn.Module):
     - Middle: self-attention at lowest resolution
     - Decoder: progressively upsamples with skip connections from
       encoder
-    - Conditioning: time embedding injected via AdaGN, cond_vec embedding
-      added to final output via linear projection (following paper)
+    - Conditioning: per-scalar sinusoidal embedding of cond_vec, summed
+      with the time embedding to form a joint vector that modulates
+      every ResBlock via AdaGN (DiT/SiT/SD3 pattern).
 
     Hyperparameter choices (following Samaddar et al. for scientific
     data):
@@ -225,11 +226,18 @@ class VelocityUNet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
 
-        # cond_vec projection: linear projection to output channels
-        # Following Samaddar et al., cond_vec is added to final output
-        self.cond_vec_proj = nn.Linear(cond_vec_dim, in_channels)
+        # f embedding: per-scalar sinusoidal Fourier features + MLP,
+        # summed with the time embedding to form a joint vector that
+        # modulates every ResBlock via AdaGN. The Fourier step is
+        # applied inline in forward(); this MLP mirrors `time_mlp`.
+        self.f_scalar_emb_dim = 32
+        self.f_mlp = nn.Sequential(
+            nn.Linear(cond_vec_dim * self.f_scalar_emb_dim, 4 * time_dim),
+            nn.SiLU(),
+            nn.Linear(4 * time_dim, time_dim),
+        )
 
-        # Conditioning dimension for AdaGN (time only)
+        # AdaGN conditioning dim = joint (time + f) embedding dim
         cond_dim = time_dim
 
         # Initial convolution
@@ -341,7 +349,7 @@ class VelocityUNet(nn.Module):
         freqs = torch.exp(
             -math.log(10000) * torch.arange(half_dim, device=device) / half_dim
         )
-        args = t[:, None] * freqs[None, :] * 1000
+        args = t[:, None] * freqs[None, :]
         return torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
 
     def forward(
@@ -352,7 +360,7 @@ class VelocityUNet(nn.Module):
 
         Args:
             x: (batch, in_channels, H, W) noisy image x_t
-            f: (batch, cond_vec_dim) conditional features vector
+            f: (batch, cond_vec_dim) conditioning vector
             t: (batch,) time values in [0, 1]
 
         Returns:
@@ -365,9 +373,18 @@ class VelocityUNet(nn.Module):
                 f"got {x.shape[2]}x{x.shape[3]}"
             )
 
-        # Time conditioning only (cond_vec added at output per paper)
-        t_emb = self._sinusoidal_embedding(t, self.base_channels)
-        cond = self.time_mlp(t_emb)
+        # Joint embedding e = t_emb + f_emb, injected into every
+        # ResBlock via AdaGN (DiT/SiT/SD3 pattern).
+        t_emb = self.time_mlp(
+            self._sinusoidal_embedding(t, self.base_channels)
+        )
+        # Per-scalar sinusoidal Fourier features for f, vectorized:
+        # flatten (B, f_dim) -> (B*f_dim,), embed, reshape back.
+        f_sin = self._sinusoidal_embedding(
+            f.reshape(-1), self.f_scalar_emb_dim
+        ).reshape(x.shape[0], -1)
+        f_emb = self.f_mlp(f_sin)
+        cond = t_emb + f_emb
 
         # Initial conv
         h = self.conv_in(x)
@@ -401,10 +418,7 @@ class VelocityUNet(nn.Module):
                 h = F.interpolate(h, scale_factor=2, mode="nearest")
                 h = upsample(h)
 
-        # Add cond_vec embedding to output (following Samaddar et al.)
-        # Linear projection broadcast to spatial dimensions
-        f_emb = self.cond_vec_proj(f)[:, :, None, None]  # (B, C, 1, 1)
-        return self.conv_out(h) + f_emb
+        return self.conv_out(h)
 
 
 # =====================================================================
@@ -419,12 +433,10 @@ class CFM(nn.Module):
 
     def __init__(
         self,
-        vae_encoder: nn.Module,
         cond_vec_dim: int = 32,
         in_channels: int = 5,
         input_size: int = 64,
         base_channels: int = 64,
-        beta: float = 0.001,
         **unet_kwargs,
     ):
         super().__init__()
@@ -432,7 +444,6 @@ class CFM(nn.Module):
         self.cond_vec_dim = cond_vec_dim
         self.in_channels = in_channels
         self.input_size = input_size
-        self.beta = beta
 
         # Trainable components
         self.velocity_net = VelocityUNet(
@@ -451,11 +462,11 @@ class CFM(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Compute LCFM training loss.
+        Compute CFM training loss.
 
         Args:
             x1: (batch, channels, H, W) real images from dataset
-            x1: (batch, cond_dim)
+            f: (batch, cond_vec_dim) conditioning vector
 
         Returns:
             loss: scalar loss value
@@ -463,35 +474,31 @@ class CFM(nn.Module):
         batch_size = x1.shape[0]
         device = x1.device
 
-        # 2. Sample noise (source distribution)
+        # Sample noise (source distribution)
         x0 = torch.randn_like(x1)
 
-        # 3. Sample time uniformly
+        # Sample time uniformly
         t = torch.rand(batch_size, device=device)
 
-        # 4. Interpolate: x_t = (1-t)*x_0 + t*x_1
-        # Reshape t for broadcasting: (batch,) -> (batch, 1, 1, 1)
+        # Interpolate: x_t = (1-t)*x_0 + t*x_1
         t_broadcast = t[:, None, None, None]
         x_t = (1 - t_broadcast) * x0 + t_broadcast * x1
 
-        # 5. Target velocity (constant along straight path)
-        u_t = x1 - x0  # ????????????????/
+        # Target velocity (constant along the linear path)
+        u_t = x1 - x0
 
-        # 6. Predict velocity
+        # Predict velocity
         v_pred = self.velocity_net(x_t, f, t)
 
-        # 7. Flow matching loss (weighted MSE when ivar/mask provided)
+        # Flow matching loss (weighted MSE when ivar/mask provided)
         if ivar is not None and mask is not None:
             squared_error = (v_pred - u_t).pow(2)
             mask_float = mask.float()
             weighted_error = squared_error * ivar * mask_float
             num_valid = mask_float.sum().clamp(min=1.0)
-            flow_loss = weighted_error.sum() / num_valid
+            loss = weighted_error.sum() / num_valid
         else:
-            flow_loss = F.mse_loss(v_pred, u_t)
-
-        # 9. Total loss
-        loss = flow_loss
+            loss = F.mse_loss(v_pred, u_t)
 
         return loss
 
@@ -508,8 +515,8 @@ class CFM(nn.Module):
         Generate samples using the trained model.
 
         Args:
-            x_train: (batch, channels, H, W) training images to
-                condition on
+            batch_size: number of samples to draw
+            device: torch device for sampling
             f: (batch, cond_vec_dim) conditional features vector
             num_steps: number of ODE integration steps (Euler method)
             return_trajectory: if True, return intermediate states
@@ -535,11 +542,7 @@ class CFM(nn.Module):
         dt = 1.0 / num_steps
         for step in range(num_steps):
             t = torch.full((batch_size,), step * dt, device=device)
-
-            # Predict velocity at current state
             v = self.velocity_net(x, f, t)
-
-            # Euler step
             x = x + v * dt
 
             if return_trajectory:
@@ -552,7 +555,6 @@ class CFM(nn.Module):
     @torch.no_grad()
     def sample_with_ode_solver(
         self,
-        x_train: torch.Tensor,
         f: torch.Tensor,
         solver: str = "dopri5",
         rtol: float = 1e-5,
@@ -565,7 +567,6 @@ class CFM(nn.Module):
         This is more accurate than fixed-step Euler but slower.
 
         Args:
-            x_train: training images to get cond_vecs from
             f: (batch, cond_vec_dim) conditional features vector
             solver: ODE solver ('dopri5', 'rk4', etc.)
             rtol, atol: tolerances for adaptive solver
@@ -576,10 +577,9 @@ class CFM(nn.Module):
 
         self.eval()
 
-        batch_size = x_train.shape[0]
-        device = x_train.device
+        batch_size = f.shape[0]
+        device = f.device
 
-        # Define ODE function
         def ode_fn(t, x):
             t_batch = torch.full((batch_size,), t.item(), device=device)
             return self.velocity_net(x, f, t_batch)
