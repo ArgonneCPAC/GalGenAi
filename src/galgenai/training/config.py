@@ -76,6 +76,28 @@ class LCFMTrainingConfig(BaseTrainingConfig):
 
 
 @dataclass
+class CFMTrainingConfig(BaseTrainingConfig):
+    """CFM-specific training configuration."""
+
+    # Step-based training
+    num_steps: int = 100_000
+    warmup_steps: int = 1000
+
+    # Sampling during training
+    sample_every: int = 5000
+    num_sample_images: int = 16
+
+    # Validation (should be a multiple of log_every)
+    validate_every: int = 500
+
+    # Override defaults for step-based training
+    log_every: int = 100
+    save_every: int = 10_000
+    learning_rate: float = 2e-4
+    weight_decay: float = 0.01
+
+
+@dataclass
 class CNFTrainingConfig(BaseTrainingConfig):
     """CNF training config."""
 
@@ -100,7 +122,9 @@ class CNFTrainingConfig(BaseTrainingConfig):
 # ============================================================================
 
 
-def load_vae_training_config(config_path: Optional[str] = None) -> VAETrainingConfig:
+def load_vae_training_config(
+    config_path: Optional[str] = None,
+) -> VAETrainingConfig:
     """
     Load VAE training config from YAML file.
 
@@ -140,7 +164,9 @@ def load_vae_training_config(config_path: Optional[str] = None) -> VAETrainingCo
     )
 
 
-def load_lcfm_training_config(config_path: Optional[str] = None) -> LCFMTrainingConfig:
+def load_lcfm_training_config(
+    config_path: Optional[str] = None,
+) -> LCFMTrainingConfig:
     """
     Load LCFM training config from YAML file.
 
@@ -182,7 +208,9 @@ def load_lcfm_training_config(config_path: Optional[str] = None) -> LCFMTraining
     )
 
 
-def load_cnf_training_config(config_path: Optional[str] = None) -> CNFTrainingConfig:
+def load_cnf_training_config(
+    config_path: Optional[str] = None,
+) -> CNFTrainingConfig:
     """
     Load CNF training config from YAML file.
 
