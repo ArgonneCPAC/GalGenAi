@@ -45,7 +45,7 @@ class VAEEncoder(nn.Module):
             stage.
         logvar_clamp: Tuple (min, max) to clamp logvar for numerical
             stability. Prevents overflow in exp() during
-            reparameterization. Default: (-30.0, 20.0).
+            reparameterization. Default: (-10.0, 10.0).
     """
 
     def __init__(
@@ -54,7 +54,7 @@ class VAEEncoder(nn.Module):
         latent_dim: int = 16,
         input_size: int = 32,
         channel_depths: Optional[List[int]] = None,
-        logvar_clamp: Tuple[float, float] = (-30.0, 20.0),
+        logvar_clamp: Tuple[float, float] = (-10.0, 10.0),
     ):
         super().__init__()
         if channel_depths is None:
@@ -69,6 +69,7 @@ class VAEEncoder(nn.Module):
         self.initial_conv = nn.Conv2d(
             in_channels, channel_depths[0], kernel_size=3, padding=1
         )
+        self.relu = nn.ReLU(inplace=True)
 
         # Downsampling stages
         self.downsample_blocks = nn.ModuleList()
@@ -95,6 +96,7 @@ class VAEEncoder(nn.Module):
     def forward_conv(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through convolutional layers."""
         x = self.initial_conv(x)
+        x = self.relu(x)
         for block in self.downsample_blocks:
             x = block(x)
         return x
@@ -178,8 +180,8 @@ class VAEDecoder(nn.Module):
             channel_depths[-1], out_channels, kernel_size=3, padding=1
         )
 
-        # Output activation: Softplus
-        self.out_activation = nn.Softplus()
+        # Output activation: ReLU
+        self.out_activation = nn.ReLU()
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -224,7 +226,7 @@ class VAE(nn.Module):
             decoder will use the reverse.
         logvar_clamp: Tuple (min, max) to clamp logvar in encoder for
             numerical stability. Prevents overflow during
-            reparameterization. Default: (-30.0, 20.0).
+            reparameterization. Default: (-10.0, 10.0).
     """
 
     def __init__(
@@ -233,7 +235,7 @@ class VAE(nn.Module):
         latent_dim: int = 16,
         input_size: int = 32,
         channel_depths: Optional[List[int]] = None,
-        logvar_clamp: Tuple[float, float] = (-30.0, 20.0),
+        logvar_clamp: Tuple[float, float] = (-10.0, 10.0),
     ):
         super().__init__()
         if channel_depths is None:

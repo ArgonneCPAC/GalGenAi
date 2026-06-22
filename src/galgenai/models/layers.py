@@ -113,6 +113,7 @@ class DownsampleBlock(nn.Module):
         self.downsample = nn.Conv2d(
             in_channels, out_channels, kernel_size=3, stride=2, padding=1
         )
+        self.relu = nn.ReLU()
 
         # Two residual blocks at the new resolution
         self.res_block1 = ResidualBlock(out_channels)
@@ -121,6 +122,7 @@ class DownsampleBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with downsampling and residual blocks."""
         x = self.downsample(x)
+        x = self.relu(x)
         x = self.res_block1(x)
         x = self.res_block2(x)
         return x
@@ -141,10 +143,11 @@ class UpsampleBlock(nn.Module):
         # Two residual blocks at current resolution
         self.res_block1 = ResidualBlock(in_channels)
         self.res_block2 = ResidualBlock(in_channels)
+        self.relu = nn.ReLU()
 
         # Upsampling with transposed convolution
         self.upsample = nn.ConvTranspose2d(
-            in_channels, out_channels, kernel_size=4, stride=2, padding=1
+            in_channels, out_channels, kernel_size=3, stride=2, padding=1
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -152,4 +155,5 @@ class UpsampleBlock(nn.Module):
         x = self.res_block1(x)
         x = self.res_block2(x)
         x = self.upsample(x)
+        x = self.relu(x)
         return x

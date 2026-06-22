@@ -228,7 +228,7 @@ def main():
         return_noiseless_flux=compute_loss_on_noiseless,
         condition_cols=condition_cols,
         conditional_norm_fn=conditional_norm_fn,
-        invert_mask=True,
+        invert_mask=cosmos_cfg["invert_mask"],
         augment_train=True,
     )
     print(f"Crop size  : {nx}x{nx} px")
