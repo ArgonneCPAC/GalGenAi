@@ -297,3 +297,4 @@ class VAETrainer(BaseTrainer[VAETrainingConfig]):
 
         print("\nTraining complete!")
         self.save_checkpoint(is_best=False)
+        self.save_loss_plot()

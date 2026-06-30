@@ -307,3 +307,4 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         print("\nTraining complete!")
 
         self.save_checkpoint()
+        self.save_loss_plot()
