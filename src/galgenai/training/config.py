@@ -53,6 +53,13 @@ class CFMTrainingConfig(BaseTrainingConfig):
     num_steps: int = 100_000
     warmup_steps: int = 1000
 
+    # OneCycleLR: initial_lr = learning_rate / div_factor
+    div_factor: float = 25.0
+    # If set, the schedule ramps up + anneals down within this many
+    # steps (< num_steps) instead of the full run, then holds flat at
+    # the lr_min_factor floor for the remaining steps.
+    lr_converge_at_step: Optional[int] = None
+
     sample_every: int = 5000
     num_sample_images: int = 16
     validate_every: int = 500
@@ -118,6 +125,8 @@ def load_cfm_training_config(
     return CFMTrainingConfig(
         num_steps=cfm_config["steps"],
         warmup_steps=cfm_config["warmup"],
+        div_factor=cfm_config.get("div_factor", 25.0),
+        lr_converge_at_step=cfm_config.get("lr_converge_at_step"),
         sample_every=cfm_config["sample_every"],
         num_sample_images=cfm_config["num_sample_images"],
         validate_every=cfm_config["validate_every"],
