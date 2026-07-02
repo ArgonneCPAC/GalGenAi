@@ -195,3 +195,53 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         entry = {"step": self.global_step, "epoch": self.current_epoch}
         entry.update({f"{prefix}{k}": v for k, v in metrics.items()})
         self.loss_history.append(entry)
+
+    def save_loss_plot(self, filename: str = "loss_history.png"):
+        """Save a simple loss-history plot when loss metrics exist."""
+        loss_keys = sorted(
+            {
+                key
+                for entry in self.loss_history
+                for key, value in entry.items()
+                if "loss" in key and isinstance(value, (int, float))
+            }
+        )
+        if not loss_keys:
+            return None
+
+        import matplotlib.pyplot as plt
+
+        epochs = [entry["epoch"] for entry in self.loss_history]
+        use_epoch = any(epoch > 0 for epoch in epochs)
+        x_key = "epoch" if use_epoch else "step"
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        for key in loss_keys:
+            points = [
+                (entry[x_key], entry[key])
+                for entry in self.loss_history
+                if key in entry
+            ]
+            if not points:
+                continue
+            xs, ys = zip(*points, strict=True)
+            ax.plot(xs, ys, label=key, marker="o", ms=3, lw=1)
+
+        ax.set_xlabel(x_key)
+        ax.set_ylabel("loss")
+        if all(
+            entry[key] > 0
+            for entry in self.loss_history
+            for key in loss_keys
+            if key in entry
+        ):
+            ax.set_yscale("log")
+        ax.legend()
+        ax.grid(True, which="both", alpha=0.3)
+        fig.tight_layout()
+
+        output_path = self.output_dir / filename
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved loss plot to {output_path}")
+        return output_path

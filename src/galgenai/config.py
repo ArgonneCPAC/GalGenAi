@@ -1,74 +1,68 @@
-"""to load config"""
+"""Configuration loading helpers."""
 
-import os
-import yaml
+import shutil
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-# Repository root: go up from src/galgenai/ to repository root
+import yaml
+
+
 REPO_ROOT = Path(__file__).parent.parent.parent
+DEFAULT_CONFIG_PATH = Path(__file__).with_name("galgenai_config.yaml")
 
 
-def load_config(config_path: Optional[str] = None) -> Dict:
-    """
-    Load configuration from YAML file and resolve relative paths.
-
-    Relative paths in the config are resolved relative to the
-    repository root. Absolute paths are kept as-is.
-
-    Parameters
-    ----------
-    config_path : str, optional
-        Explicit path to config file. If None, searches default
-        locations.
-
-    Returns
-    -------
-    dict
-        Configuration dictionary with resolved paths.
-        Returns empty dict if no config found.
-    """
+def resolve_config_path(config_path: Optional[str | Path] = None) -> Path:
+    """Return the explicit config path, or the packaged default."""
     if config_path is None:
-        config_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "galgenai_config.yaml",
-        )
-        print(config_path)
-    config_path = Path(config_path)
+        return DEFAULT_CONFIG_PATH
+    return Path(config_path)
 
-    if config_path.exists() and config_path.is_file():
-        try:
-            with open(config_path, "r") as f:
-                config = yaml.safe_load(f)
-                if config is None:
-                    config = {}
 
-                # Resolve relative paths in cosmos section
-                if "cosmos" in config:
-                    cosmos = config["cosmos"]
-                    # Resolve catalog_path if relative
-                    if "catalog_path" in cosmos:
-                        path = Path(cosmos["catalog_path"])
-                        if not path.is_absolute():
-                            cosmos["catalog_path"] = str(REPO_ROOT / path)
-                    # Resolve hf_dataset_path if relative
-                    if "hf_dataset_path" in cosmos:
-                        path = Path(cosmos["hf_dataset_path"])
-                        if not path.is_absolute():
-                            cosmos["hf_dataset_path"] = str(REPO_ROOT / path)
+def _resolve_path(path_value: str | Path) -> str:
+    """Resolve relative config paths from the repository root."""
+    path = Path(path_value)
+    if path.is_absolute():
+        return str(path)
+    return str(REPO_ROOT / path)
 
-                # Resolve relative paths in training section
-                if "training" in config and "output_dir" in config["training"]:
-                    path = Path(config["training"]["output_dir"])
-                    if not path.is_absolute():
-                        config["training"]["output_dir"] = str(
-                            REPO_ROOT / path
-                        )
 
-                return config
-        except Exception as e:
-            raise ValueError(
-                f"Failed to load config from {config_path}: {e}"
-            ) from e
+def load_config(config_path: Optional[str | Path] = None) -> Dict[str, Any]:
+    """Load a YAML config file and resolve paths used by training."""
+    path = resolve_config_path(config_path)
+    if not path.exists():
+        if config_path is not None:
+            raise FileNotFoundError(f"Config file not found: {path}")
+        return {}
 
-    return {}
+    try:
+        with open(path, "r") as f:
+            config = yaml.safe_load(f) or {}
+    except Exception as exc:
+        raise ValueError(f"Failed to load config from {path}: {exc}") from exc
+
+    if "results_dir" in config:
+        config["results_dir"] = _resolve_path(config["results_dir"])
+
+    for dataset_cfg in config.get("datasets", {}).values():
+        if "path" in dataset_cfg:
+            dataset_cfg["path"] = _resolve_path(dataset_cfg["path"])
+
+    gen_cfg = config.get("dataset_generation", {})
+    for key in ("catalog_path", "output_dir"):
+        if key in gen_cfg:
+            gen_cfg[key] = _resolve_path(gen_cfg[key])
+
+    return config
+
+
+def copy_config_to_results(
+    config_path: Optional[str | Path], results_dir: str | Path
+) -> Path:
+    """Copy the config file used for a run into ``results_dir``."""
+    source = resolve_config_path(config_path)
+    target_dir = Path(results_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "config.yaml"
+    if source.resolve() != target.resolve():
+        shutil.copy2(source, target)
+    return target

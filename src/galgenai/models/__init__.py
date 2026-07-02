@@ -7,7 +7,7 @@ from .layers import (
     UpsampleBlock,
     SqueezeExcitationBlock,
 )
-from .lcfm import LCFM, VelocityUNet
+from .cfm import CFM, VelocityUNet
 from .cnf import ConditionalNormalizingFlow
 from .cnf_layers import (
     AffineCoupling,
@@ -23,7 +23,7 @@ __all__ = [
     "DownsampleBlock",
     "UpsampleBlock",
     "SqueezeExcitationBlock",
-    "LCFM",
+    "CFM",
     "VelocityUNet",
     "ConditionalNormalizingFlow",
     "AffineCoupling",

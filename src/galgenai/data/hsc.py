@@ -55,7 +55,7 @@ class HSCDataset(torch.utils.data.Dataset):
     Mask convention: ``1 = valid, 0 = invalid``.
 
     Mask convention:
-    downstream losses (VAE/LCFM/CFM weighted MSE) treat the
+    downstream losses (VAE/CFM weighted MSE) treat the
     emitted mask as ``1 = valid, 0 = invalid``.
     Set ``invert_mask=True`` when the source survey writes
     the opposite convention (``1 = bad pixel flag``).

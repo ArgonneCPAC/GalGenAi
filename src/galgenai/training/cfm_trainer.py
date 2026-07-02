@@ -4,13 +4,42 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.cfm import CFM, count_parameters
 from .base_trainer import BaseTrainer
 from .config import CFMTrainingConfig
+
+
+def cfm_scheduler_total_steps(config: CFMTrainingConfig) -> int:
+    """Number of steps over which the OneCycleLR schedule runs.
+
+    Defaults to ``num_steps``, but can be set shorter via
+    ``lr_converge_at_step`` so the schedule ramps up and anneals down
+    early, then holds flat at the ``lr_min_factor`` floor for the
+    remainder of training.
+    """
+    return config.lr_converge_at_step or config.num_steps
+
+
+def build_cfm_scheduler(
+    optimizer: torch.optim.Optimizer, config: CFMTrainingConfig
+) -> OneCycleLR:
+    """Build the OneCycleLR schedule used for CFM training: ramps up
+    to ``learning_rate`` over ``warmup_steps``, then cosine-anneals
+    down to ``learning_rate * lr_min_factor``."""
+    total_steps = cfm_scheduler_total_steps(config)
+    return OneCycleLR(
+        optimizer,
+        max_lr=config.learning_rate,
+        total_steps=total_steps,
+        pct_start=config.warmup_steps / total_steps,
+        div_factor=config.div_factor,
+        final_div_factor=1.0 / (config.div_factor * config.lr_min_factor),
+        anneal_strategy="cos",
+    )
 
 
 def _extract_cfm_batch(
@@ -43,7 +72,7 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
     Trainer for CFM with step-based training.
 
     Features:
-    - Warmup + cosine annealing scheduler
+    - OneCycleLR scheduler (ramp up to max LR, then anneal down)
     - Sample generation for visualization
     - Infinite data loader pattern
     """
@@ -69,8 +98,7 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         print(f"  Total training steps: {config.num_steps:,}")
 
     def _setup_optimizer(self):
-        """Set up AdamW with cosine annealing (default) or custom
-        scheduler."""
+        """Set up AdamW with a OneCycleLR schedule."""
         trainable_params = [
             p for p in self.model.parameters() if p.requires_grad
         ]
@@ -81,26 +109,8 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
             betas=(0.9, 0.999),
         )
 
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer,
-            T_max=self.config.num_steps - self.config.warmup_steps,
-            eta_min=self.config.learning_rate * self.config.lr_min_factor,
-        )
-
-    def _get_lr_with_warmup(self) -> float:
-        """Get current LR accounting for warmup."""
-        if self.global_step < self.config.warmup_steps:
-            return self.config.learning_rate * (
-                self.global_step / self.config.warmup_steps
-            )
-        if self.scheduler is not None:
-            return self.scheduler.get_last_lr()[0]
-        return self.config.learning_rate
-
-    def _set_lr(self, lr: float):
-        """Set learning rate for all parameter groups."""
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
+        self.scheduler = build_cfm_scheduler(self.optimizer, self.config)
+        self._scheduler_total_steps = cfm_scheduler_total_steps(self.config)
 
     def _train_step(self, batch: Any) -> Dict[str, float]:
         """Execute single CFM training step."""
@@ -114,18 +124,10 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         loss.backward()
         self._clip_gradients()
         self.optimizer.step()
-
-        # Update LR with warmup handling
-        current_lr = self._get_lr_with_warmup()
-        self._set_lr(current_lr)
-
-        if (
-            self.scheduler is not None
-            and self.global_step >= self.config.warmup_steps
-        ):
+        if self.global_step < self._scheduler_total_steps:
             self.scheduler.step()
 
-        return {"loss": loss.item(), "lr": current_lr}
+        return {"loss": loss.item(), "lr": self.scheduler.get_last_lr()[0]}
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
@@ -307,3 +309,4 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         print("\nTraining complete!")
 
         self.save_checkpoint()
+        self.save_loss_plot()

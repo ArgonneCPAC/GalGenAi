@@ -9,10 +9,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.cnf import ConditionalNormalizingFlow
-from ..models.lcfm import count_parameters
 from ..models.vae import VAEEncoder
 from .base_trainer import BaseTrainer
 from .config import CNFTrainingConfig
+
+
+def _count_trainable_parameters(model: torch.nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
@@ -57,7 +60,7 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         (self.output_dir / "samples").mkdir(exist_ok=True)
 
         # Print model info
-        num_params = count_parameters(model)
+        num_params = _count_trainable_parameters(model)
         print("Conditional Normalizing Flow initialized:")
         print(f"  Trainable parameters: {num_params:,}")
         print(f"  Latent dimension: {model.latent_dim}")
@@ -414,3 +417,4 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         # Save final checkpoint (best.pt already saved
         # whenever a new best was found)
         self.save_checkpoint()
+        self.save_loss_plot()

@@ -1,247 +1,155 @@
 """
-VAE + CNF Training Pipeline for COSMOS HuggingFace Dataset
-
-Trains a two-stage generative model on simulated galaxy images produced
-by generate_hf_dataset.py (or generate_fits_dataset.py):
-
-  Stage 1  Train a VAE on COSMOS multi-band images.
-  Stage 2  Freeze the VAE encoder and train a Conditional Normalizing
-           Flow (CNF) on latent representations computed on the fly.
-
-sampling:
-
-    condition = normalize_mags(magnitudes, mag_stats)
-    z         = cnf.sample(condition)          # shape (1, latent_dim)
-    image     = vae_decoder(z)                 # shape (5, nx, nx)
-    raw_image = arcsinh_denorm(image, norm_stats)
+VAE + CNF Training Pipeline for COSMOS FITS Dataset.
 
 Run with:
-    uv run python scripts/train_cnf_cosmos.py --run-name my_run
-    uv run python scripts/train_cnf_cosmos.py --run-name my_run \\
-        --skip-vae
+    uv run python scripts/train_cnf_cosmos.py
+    uv run python scripts/train_cnf_cosmos.py \
+        --config path/to/config.yaml
+    uv run python scripts/train_cnf_cosmos.py --skip-vae
 """
 
 import argparse
-import shutil
 from pathlib import Path
 
 import torch
 
 from galgenai import get_device
-from galgenai.config import load_config
+from galgenai.config import (
+    copy_config_to_results,
+    load_config,
+    resolve_config_path,
+)
+from galgenai.data.cosmos_dataset import load_fits_dataset, make_loaders
 from galgenai.data.normalization import (
-    get_image_norm_fn,
     get_conditional_norm_fn,
-    save_image_norm_stats,
+    get_image_norm_fn,
     save_conditional_stats,
+    save_image_norm_stats,
 )
-from galgenai.data.cosmos_dataset import (
-    load_fits_dataset,
-    make_loaders,
-)
-from galgenai.models import VAE, ConditionalNormalizingFlow
+from galgenai.models import ConditionalNormalizingFlow, VAE
 from galgenai.training import (
     CNFTrainer,
     VAETrainer,
-    load_vae_training_config,
     load_cnf_training_config,
+    load_vae_training_config,
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train VAE + CNF on the COSMOS HuggingFace dataset",
+        description="Train VAE + CNF on a COSMOS FITS dataset",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(resolve_config_path()),
+        help="Training config file",
+    )
     parser.add_argument(
         "--skip-vae",
         action="store_true",
         help="Skip VAE training and load from existing checkpoint",
     )
-
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     device = get_device()
-    cfg = load_config()
+    cfg = load_config(args.config)
+
+    data_cfg = cfg["data"]
+    cosmos_cfg = cfg["datasets"]["cosmos"]
+    vae_model_cfg = cfg["models"]["vae"]
+    cnf_model_cfg = cfg["models"]["cnf"]
+    vae_train_cfg = cfg["training"]["vae"]
+
+    results_dir = Path(cfg["results_dir"])
+    results_dir.mkdir(parents=True, exist_ok=True)
+    copied_config = copy_config_to_results(args.config, results_dir)
+
+    nx = data_cfg["image_size"]
+    batch_size = data_cfg["batch_size"]
+    in_channels = data_cfg["in_channels"]
+    condition_cols = data_cfg["condition_cols"]
+    condition_dim = len(condition_cols)
+    latent_dim = vae_model_cfg["latent_dim"]
+    image_norm_type = data_cfg["image_norm_type"]
 
     print(f"Using device: {device}")
+    print(f"Results directory: {results_dir}")
+    print(f"Copied config to: {copied_config}")
 
-    # ------------------------------------------------------------------
-    # Load all required config values
-    # ------------------------------------------------------------------
-    try:
-        # Top-level sections
-        cosmos_cfg = cfg["cosmos"]
-        train_cfg = cfg["training"]
-        model_cfg = train_cfg["model"]
-        vae_cfg = train_cfg["vae"]
-        cnf_cfg = train_cfg["cnf"]
-        norm_cfg = cosmos_cfg["normalization"]
-        run_name = cfg["run_name"]
-
-        # Dataset config
-        dataset_path = cosmos_cfg["hf_dataset_path"]
-        train_ratio = cosmos_cfg["train_ratio"]
-        val_ratio = cosmos_cfg["val_ratio"]
-        num_workers = cosmos_cfg["num_workers"]
-        split_seed = cosmos_cfg["split_seed"]
-
-        # Training config
-        output_dir = Path(train_cfg["output_dir"]) / run_name
-        nx = train_cfg["nx"]
-        batch_size = train_cfg["batch_size"]
-
-        # Model config
-        in_channels = model_cfg["in_channels"]
-        latent_dim = model_cfg["latent_dim"]
-
-        # VAE config (only non-training params)
-        vae_image_norm_type = vae_cfg["norm_type"]
-        compute_loss_on_noiseless = vae_cfg.get(
-            "compute_loss_on_noiseless", False
-        )
-
-        # CNF config (only non-training params)
-        condition_cols = cnf_cfg["condition_cols"]
-        cnf_num_blocks = cnf_cfg["num_blocks"]
-        cnf_hidden_dim = cnf_cfg["hidden_dim"]
-
-    except KeyError as e:
-        raise ValueError(
-            f"Missing required config value: {e}. "
-            "Please ensure all required values are present in the"
-            " config file."
-        ) from e
-
-    print(f"Run name: {run_name}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy the full config file to output directory
-    config_file_path = (
-        Path(__file__).parent.parent
-        / "src"
-        / "galgenai"
-        / "galgenai_config.yaml"
-    )
-    if config_file_path.exists():
-        shutil.copy(config_file_path, output_dir / "cnf_galgenai_config.yaml")
-        print(f"Copied config to: {output_dir / 'cnf_galgenai_config.yaml'}")
-
-    cond_stats_save_path = output_dir / "cond_stats.yaml"
-    norm_stats_save_path = output_dir / "norm_stats.yaml"
-    condition_dim = len(condition_cols)
-
-    # ------------------------------------------------------------------
-    # Load dataset
-    # ------------------------------------------------------------------
-    print(f"\nLoading FITS dataset from: {dataset_path}")
-
-    # Extract magnitude columns and redshift column from config
-    catalog_cols = cosmos_cfg["catalog_columns"]
-    mag_cols = catalog_cols["mag_cols"]
-    redshift_col = catalog_cols["redshift_col"]
-
+    print(f"\nLoading FITS dataset from: {cosmos_cfg['path']}")
     dataset_raw = load_fits_dataset(
-        dataset_path,
-        metadata_file="metadata.csv",
-        mag_cols=mag_cols,
-        redshift_col=redshift_col,
+        cosmos_cfg["path"],
+        metadata_file=cosmos_cfg.get("metadata_file", "metadata.csv"),
+        mag_cols=cosmos_cfg["mag_cols"],
+        redshift_col=cosmos_cfg["redshift_col"],
         mag_sentinel=cosmos_cfg.get("mag_sentinel", 999.0),
         redshift_sentinel=cosmos_cfg.get("redshift_sentinel", -99.0),
-        nx=nx,  # Crop when creating cached dataset
-        load_noiseless=compute_loss_on_noiseless,
+        nx=nx,
+        load_noiseless=vae_train_cfg["compute_loss_on_noiseless"],
     )
 
     n_total = len(dataset_raw)
+    train_ratio = cosmos_cfg["train_ratio"]
+    val_ratio = cosmos_cfg["val_ratio"]
     n_train = int(n_total * train_ratio)
     n_val = int(n_total * val_ratio)
     n_test = int(n_total * (1 - train_ratio - val_ratio))
     print(
-        f"Dataset sizes: {n_train} train / {n_val} val / {n_test} test"
-        f" (total: {n_total})"
+        f"Dataset sizes: {n_train} train / {n_val} val / {n_test} test "
+        f"(total: {n_total})"
     )
 
-    # ------------------------------------------------------------------
-    # Load normalization configuration
-    # ------------------------------------------------------------------
-    print("\n\nLoading Norm Config\n")
-
-    # Load image normalization stats from config
-    print(f"\nImage normalisation: {vae_image_norm_type}")
-    print("  Loading stats from config file")
-
+    norm_cfg = cosmos_cfg["normalization"]
+    print(f"\nImage normalization: {image_norm_type}")
     image_norm_fn, image_denorm_fn, norm_stats = get_image_norm_fn(
-        img_norm_type=vae_image_norm_type,
+        img_norm_type=image_norm_type,
         config=norm_cfg["image"],
         return_denorm=True,
     )
+    norm_stats_path = results_dir / "norm_stats.yaml"
+    save_image_norm_stats(norm_stats, norm_stats_path)
+    print(f"Image normalization stats saved to: {norm_stats_path}")
 
-    save_image_norm_stats(norm_stats, norm_stats_save_path)
-    print(f"  Image normalization stats saved to: {norm_stats_save_path}")
-
-    # ------------------------------------------------------------------
-    # Load conditional normalization from config
-    # ------------------------------------------------------------------
     print(f"\nConditioning columns ({condition_dim}): {condition_cols}")
-
-    print("  Loading conditional stats from config file")
     conditional_norm_fn, cond_stats = get_conditional_norm_fn(
         config=norm_cfg["conditions"],
     )
-
-    # Verify that condition_cols matches the config
     if condition_cols != cond_stats.cols:
         raise ValueError(
-            f"Mismatch between CNF condition_cols {condition_cols} and "
-            f"config normalization.conditions.cols {cond_stats.cols}"
+            f"Configured condition_cols {condition_cols} do not match "
+            f"normalization.conditions.cols {cond_stats.cols}"
         )
+    cond_stats_path = results_dir / "cond_stats.yaml"
+    save_conditional_stats(cond_stats, cond_stats_path)
+    print(f"Conditional stats saved to: {cond_stats_path}")
 
-    # Save conditional stats
-    save_conditional_stats(cond_stats, cond_stats_save_path)
-    print(f"  Conditional stats saved to: {cond_stats_save_path}")
-
-    # ------------------------------------------------------------------
-    # Create data loaders (shared by VAE and CNF)
-    # ------------------------------------------------------------------
-    print("\n\nCreating data loaders:\n")
-    print(f"Compute loss on noiseless: {compute_loss_on_noiseless}")
-
-    # Create loaders with both image and conditional normalization
-    # Returns (flux, ivar, mask, condition) tuples when
-    # return_aux_data=True and condition_cols are set
-    # VAE will use (flux, ivar, mask), CNF will use (flux, condition)
+    print("\nCreating data loaders")
     train_loader, val_loader, test_loader = make_loaders(
         dataset_raw,
         nx=nx,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=cosmos_cfg["num_workers"],
         train_ratio=train_ratio,
         val_ratio=val_ratio,
-        random_seed=split_seed,
+        random_seed=cosmos_cfg["split_seed"],
         image_norm_fn=image_norm_fn,
-        return_aux_data=True,  # Return (flux, ivar, mask, noiseless, cond)
-        return_noiseless_flux=compute_loss_on_noiseless,
+        return_aux_data=True,
+        return_noiseless_flux=vae_train_cfg["compute_loss_on_noiseless"],
         condition_cols=condition_cols,
         conditional_norm_fn=conditional_norm_fn,
-        invert_mask=True,
-        augment_train=True,
+        invert_mask=cosmos_cfg.get("invert_mask", False),
+        augment_train=cosmos_cfg.get("augment_train", True),
     )
-    print(f"Crop size  : {nx}x{nx} px")
-    n_train_batches = (n_train + batch_size - 1) // batch_size
-    n_val_batches = (n_val + batch_size - 1) // batch_size
-    print(f"Batches    : {n_train_batches} train / {n_val_batches} val")
+    print(f"Crop size: {nx}x{nx} px")
+    print(f"Batches: {len(train_loader)} train / {len(val_loader)} val")
     if test_loader is not None:
-        n_test_batches = (n_test + batch_size - 1) // batch_size
-        print(f"           : {n_test_batches} test")
+        print(f"         {len(test_loader)} test")
 
-    # ------------------------------------------------------------------
-    # Stage 1: VAE
-    # ------------------------------------------------------------------
     if not args.skip_vae:
         print("\n" + "=" * 60)
         print("STAGE 1: TRAINING VAE")
@@ -254,9 +162,7 @@ def main():
         )
         print(f"VAE parameters: {sum(p.numel() for p in vae.parameters()):,}")
 
-        # Configure VAE training (loads from config)
-        vae_config = load_vae_training_config()
-
+        vae_config = load_vae_training_config(args.config)
         vae_trainer = VAETrainer(
             model=vae,
             train_loader=train_loader,
@@ -269,26 +175,19 @@ def main():
         del vae, vae_trainer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
     else:
         print("\n" + "=" * 60)
-        print("STAGE 1: SKIPPED — VAE training not required")
+        print("STAGE 1: SKIPPED - VAE training not required")
         print("=" * 60)
 
-    # ------------------------------------------------------------------
-    # Stage 2: CNF
-    # ------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("STAGE 2: TRAINING CONDITIONAL NORMALIZING FLOW")
     print("=" * 60)
 
-    # ---- Load frozen encoder from VAE checkpoint ----------------
-    vae_ckpt_path = output_dir / "vae" / "checkpoints" / "best.pt"
-    print(f"loading vae from {vae_ckpt_path}")
+    vae_ckpt_path = results_dir / "vae" / "checkpoints" / "best.pt"
     if not vae_ckpt_path.exists():
         raise FileNotFoundError(
-            f"No VAE checkpoint found at {vae_ckpt_path}. "
-            "Train VAE first (Stage 1)."
+            f"No VAE checkpoint found at {vae_ckpt_path}. Train VAE first."
         )
 
     vae = VAE(
@@ -301,7 +200,6 @@ def main():
     )
     vae.load_state_dict(checkpoint["model_state_dict"])
 
-    # Extract encoder and freeze it
     encoder = vae.encoder
     encoder.to(device).eval()
     for param in encoder.parameters():
@@ -312,27 +210,15 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    print(
-        "\nUsing on-the-fly latent encoding (latents computed during training)"
-    )
-
-    # ---- Build CNF model -----------------------------------------
     cnf = ConditionalNormalizingFlow(
         latent_dim=latent_dim,
         condition_dim=condition_dim,
-        num_blocks=cnf_num_blocks,
-        hidden_dim=cnf_hidden_dim,
+        num_blocks=cnf_model_cfg["num_blocks"],
+        hidden_dim=cnf_model_cfg["hidden_dim"],
     ).to(device)
-    print(f"\nCNF parameters: {sum(p.numel() for p in cnf.parameters()):,}")
-    print(f"  latent_dim    : {latent_dim}")
-    print(f"  condition_dim : {condition_dim}  {condition_cols}")
-    print(f"  num_blocks    : {cnf_num_blocks}")
-    print(f"  hidden_dim    : {cnf_hidden_dim}")
+    print(f"CNF parameters: {sum(p.numel() for p in cnf.parameters()):,}")
 
-    # ---- Train CNF -----------------------------------------------
-    # Configure CNF training (loads from config)
-    cnf_config = load_cnf_training_config()
-
+    cnf_config = load_cnf_training_config(args.config)
     cnf_trainer = CNFTrainer(
         model=cnf,
         train_loader=train_loader,
@@ -342,28 +228,19 @@ def main():
     )
     cnf_trainer.train()
 
-    print("CNF training complete!")
-    print(f"Checkpoints saved to: {output_dir / 'cnf' / 'checkpoints'}")
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("DONE")
     print("=" * 60)
-
-    vae_ckpt = output_dir / "vae" / "checkpoints"
-    cnf_ckpt = output_dir / "cnf" / "checkpoints"
-
     print(f"""
 Output layout:
-  Config file        : {output_dir / "galgenai_config.yaml"}
-  Image normalisation: {vae_image_norm_type}
-  Normalization stats: {norm_stats_save_path}
-  Conditional stats  : {cond_stats_save_path}
-  VAE checkpoints    : {vae_ckpt}
-  CNF checkpoints    : {cnf_ckpt}
-  CNF samples        : {output_dir / "cnf" / "samples"}
+  Config file        : {copied_config}
+  Normalization stats: {norm_stats_path}
+  Conditional stats  : {cond_stats_path}
+  VAE checkpoints    : {results_dir / "vae" / "checkpoints"}
+  VAE loss plot      : {results_dir / "vae" / "loss_history.png"}
+  CNF checkpoints    : {results_dir / "cnf" / "checkpoints"}
+  CNF samples        : {results_dir / "cnf" / "samples"}
+  CNF loss plot      : {results_dir / "cnf" / "loss_history.png"}
 """)
 
 
