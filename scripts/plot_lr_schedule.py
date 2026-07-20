@@ -15,7 +15,7 @@ uv run python scripts/plot_lr_schedule.py \
 # Plot a single model's schedule and save elsewhere:
 uv run python scripts/plot_lr_schedule.py \
         --config-path ./galgenai_config.yaml \
-        --model cfm --output ./lr_schedule.png
+        --model cfm --steps-per-epoch 200 --output ./lr_schedule.png
 """
 
 import argparse
@@ -34,72 +34,76 @@ from galgenai.training.config import (
     load_vae_training_config,
 )
 
-_STEP_BASED_LOADERS = {
+_PER_BATCH_LOADERS = {
     "cfm": load_cfm_training_config,
     "cnf": load_cnf_training_config,
 }
 
 
-def _cfm_schedule(config) -> tuple[list[int], list[float]]:
+def _cfm_schedule(
+    config, steps_per_epoch: int
+) -> tuple[list[float], list[float]]:
     """Replay the OneCycleLR schedule built by build_cfm_scheduler(),
-    holding flat at the final LR past ``lr_converge_at_step`` (if
-    set) for the remainder of ``num_steps``."""
+    holding flat at the final LR past ``lr_converge_at_epoch`` (if
+    set) for the remainder of ``num_epochs``."""
     dummy_param = torch.nn.Parameter(torch.zeros(1))
     dummy_param.grad = torch.zeros_like(dummy_param)
     optimizer = torch.optim.AdamW([dummy_param], lr=config.learning_rate)
-    scheduler = build_cfm_scheduler(optimizer, config)
-    total_steps = cfm_scheduler_total_steps(config)
+    scheduler = build_cfm_scheduler(optimizer, config, steps_per_epoch)
+    total_steps = cfm_scheduler_total_steps(config, steps_per_epoch)
 
-    steps, lrs = [], []
-    for global_step in range(config.num_steps):
-        steps.append(global_step)
+    epochs, lrs = [], []
+    for global_step in range(config.num_epochs * steps_per_epoch):
+        epochs.append(global_step / steps_per_epoch)
         lrs.append(scheduler.get_last_lr()[0])
         optimizer.step()
-        if global_step < total_steps:
+        if global_step < total_steps - 1:
             scheduler.step()
 
-    return steps, lrs
+    return epochs, lrs
 
 
-def _cnf_schedule(config) -> tuple[list[int], list[float]]:
+def _cnf_schedule(
+    config, steps_per_epoch: int
+) -> tuple[list[float], list[float]]:
     """Replay the warmup + cosine schedule used by the CNF trainer."""
     dummy_param = torch.nn.Parameter(torch.zeros(1))
     dummy_param.grad = torch.zeros_like(dummy_param)
     optimizer = torch.optim.AdamW([dummy_param], lr=config.learning_rate)
+    warmup_steps = max(1, round(config.warmup_epochs * steps_per_epoch))
+    total_steps = config.num_epochs * steps_per_epoch
     scheduler = CosineAnnealingLR(
         optimizer,
-        T_max=config.num_steps - config.warmup_steps,
+        T_max=max(1, total_steps - warmup_steps),
         eta_min=config.learning_rate * config.lr_min_factor,
     )
 
-    steps, lrs = [], []
+    epochs, lrs = [], []
     global_step = 0
-    while global_step < config.num_steps:
-        if global_step < config.warmup_steps:
-            current_lr = config.learning_rate * (
-                global_step / config.warmup_steps
-            )
+    while global_step < total_steps:
+        if global_step < warmup_steps:
+            current_lr = config.learning_rate * (global_step / warmup_steps)
         else:
             current_lr = scheduler.get_last_lr()[0]
 
-        steps.append(global_step)
+        epochs.append(global_step / steps_per_epoch)
         lrs.append(current_lr)
 
         optimizer.step()
         global_step += 1
-        if global_step >= config.warmup_steps:
+        if global_step >= warmup_steps:
             scheduler.step()
 
-    return steps, lrs
+    return epochs, lrs
 
 
-_STEP_BASED_SCHEDULES = {
+_PER_BATCH_SCHEDULES = {
     "cfm": _cfm_schedule,
     "cnf": _cnf_schedule,
 }
 
 
-def _epoch_based_schedule(config) -> tuple[list[int], list[float]]:
+def _vae_schedule(config) -> tuple[list[int], list[float]]:
     """Replay the per-epoch cosine schedule used by the VAE trainer."""
     dummy_param = torch.nn.Parameter(torch.zeros(1))
     dummy_param.grad = torch.zeros_like(dummy_param)
@@ -121,9 +125,14 @@ def _epoch_based_schedule(config) -> tuple[list[int], list[float]]:
 
 
 def build_schedules(
-    config_path: str, models: list[str]
-) -> dict[str, tuple[list[int], list[float]]]:
-    """Build {model_name: (x, lr)} for each requested/present model."""
+    config_path: str, models: list[str], steps_per_epoch: int
+) -> dict[str, tuple[list[float], list[float]]]:
+    """Build {model_name: (epoch, lr)} for each requested/present model.
+
+    CFM and CNF advance their scheduler once per batch, so their curves
+    depend on ``steps_per_epoch`` (i.e. ``len(train_loader)``), which is
+    a property of the data rather than the config.
+    """
     raw_config = load_config(config_path)
     available = set(raw_config.get("training", {}).keys())
 
@@ -144,26 +153,27 @@ def build_schedules(
     for model in selected:
         if model == "vae":
             config = load_vae_training_config(config_path)
-            schedules["vae"] = _epoch_based_schedule(config)
+            schedules["vae"] = _vae_schedule(config)
         else:
-            config = _STEP_BASED_LOADERS[model](config_path)
-            schedules[model] = _STEP_BASED_SCHEDULES[model](config)
+            config = _PER_BATCH_LOADERS[model](config_path)
+            schedules[model] = _PER_BATCH_SCHEDULES[model](
+                config, steps_per_epoch
+            )
     return schedules
 
 
 def plot_schedules(
-    schedules: dict[str, tuple[list[int], list[float]]],
+    schedules: dict[str, tuple[list[float], list[float]]],
     output_path: str,
 ):
-    """Plot and save the LR-vs-step (or epoch) curves."""
+    """Plot and save the LR-vs-epoch curves."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(7, 5))
     for model, (x, lrs) in schedules.items():
-        x_label = "epoch" if model == "vae" else "step"
-        ax.plot(x, lrs, label=f"{model} (lr vs {x_label})", lw=1.5)
+        ax.plot(x, lrs, label=model, lw=1.5)
 
-    ax.set_xlabel("step / epoch")
+    ax.set_xlabel("epoch")
     ax.set_ylabel("learning rate")
     ax.set_yscale("log")
     ax.legend()
@@ -197,6 +207,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--steps-per-epoch",
+        type=int,
+        default=100,
+        help=(
+            "Batches per epoch (i.e. len(train_loader)). CFM and CNF "
+            "step their scheduler once per batch, so their curves "
+            "depend on this."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default="./lr_schedule.png",
@@ -204,7 +224,9 @@ def main():
     )
     args = parser.parse_args()
 
-    schedules = build_schedules(args.config_path, args.model)
+    schedules = build_schedules(
+        args.config_path, args.model, args.steps_per_epoch
+    )
     plot_schedules(schedules, args.output)
 
 

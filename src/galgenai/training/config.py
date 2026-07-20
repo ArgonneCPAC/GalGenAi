@@ -50,22 +50,22 @@ class VAETrainingConfig(BaseTrainingConfig):
 class CFMTrainingConfig(BaseTrainingConfig):
     """CFM-specific training configuration."""
 
-    num_steps: int = 100_000
-    warmup_steps: int = 1000
+    num_epochs: int = 100
+    warmup_epochs: float = 1.0
 
     # OneCycleLR: initial_lr = learning_rate / div_factor
     div_factor: float = 25.0
     # If set, the schedule ramps up + anneals down within this many
-    # steps (< num_steps) instead of the full run, then holds flat at
-    # the lr_min_factor floor for the remaining steps.
-    lr_converge_at_step: Optional[int] = None
+    # epochs (< num_epochs) instead of the full run, then holds flat at
+    # the lr_min_factor floor for the remaining epochs.
+    lr_converge_at_epoch: Optional[float] = None
 
-    sample_every: int = 5000
+    sample_every: int = 5
     num_sample_images: int = 16
-    validate_every: int = 500
+    validate_every: int = 1
 
-    log_every: int = 100
-    save_every: int = 10_000
+    log_every: int = 1
+    save_every: int = 10
     learning_rate: float = 2e-4
     weight_decay: float = 0.01
 
@@ -76,15 +76,15 @@ class CFMTrainingConfig(BaseTrainingConfig):
 class CNFTrainingConfig(BaseTrainingConfig):
     """CNF training config."""
 
-    num_steps: int = 50_000
-    warmup_steps: int = 1000
+    num_epochs: int = 50
+    warmup_epochs: float = 1.0
 
-    sample_every: int = 5000
+    sample_every: int = 5
     num_sample_latents: int = 64
-    validate_every: int = 500
+    validate_every: int = 1
 
-    log_every: int = 100
-    save_every: int = 5_000
+    log_every: int = 1
+    save_every: int = 5
 
 
 def _model_output_dir(config: dict, model_name: str) -> str:
@@ -123,10 +123,10 @@ def load_cfm_training_config(
     cfm_config = config["training"]["cfm"]
 
     return CFMTrainingConfig(
-        num_steps=cfm_config["steps"],
-        warmup_steps=cfm_config["warmup"],
+        num_epochs=cfm_config["epochs"],
+        warmup_epochs=cfm_config["warmup_epochs"],
         div_factor=cfm_config.get("div_factor", 25.0),
-        lr_converge_at_step=cfm_config.get("lr_converge_at_step"),
+        lr_converge_at_epoch=cfm_config.get("lr_converge_at_epoch"),
         sample_every=cfm_config["sample_every"],
         num_sample_images=cfm_config["num_sample_images"],
         validate_every=cfm_config["validate_every"],
@@ -149,8 +149,8 @@ def load_cnf_training_config(
     cnf_config = config["training"]["cnf"]
 
     return CNFTrainingConfig(
-        num_steps=cnf_config["steps"],
-        warmup_steps=cnf_config["warmup"],
+        num_epochs=cnf_config["epochs"],
+        warmup_epochs=cnf_config["warmup_epochs"],
         sample_every=cnf_config["sample_every"],
         num_sample_latents=cnf_config["num_sample_latents"],
         validate_every=cnf_config["validate_every"],

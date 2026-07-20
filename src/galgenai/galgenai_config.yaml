@@ -151,27 +151,27 @@ training:
     validate_every: 5
     log_every: 1
   cnf:
-    steps: 20000
+    epochs: 32
     lr: 0.0001
     lr_min_factor: 0.01
     weight_decay: 0.01
     max_grad_norm: 1.0
-    warmup: 1000
+    warmup_epochs: 2
     num_sample_latents: 64
-    sample_every: 1000
-    validate_every: 1000
-    save_every: 5000
-    log_every: 100
+    sample_every: 1
+    validate_every: 1
+    save_every: 8
+    log_every: 1
   cfm:
-    steps: 50000
+    epochs: 64
     lr: 0.001
     lr_min_factor: 0.01
     weight_decay: 0.01
     max_grad_norm: 1.0
-    warmup: 1000
-    sample_every: 5000
+    warmup_epochs: 2
+    sample_every: 8
     num_sample_images: 16
     train_on_noiseless: true
-    validate_every: 500
-    save_every: 10000
-    log_every: 100
+    validate_every: 1
+    save_every: 8
+    log_every: 1

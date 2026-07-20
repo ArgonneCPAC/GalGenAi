@@ -117,7 +117,7 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         """Save model checkpoint.
 
         When ``is_best`` is True, only ``best.pt`` is written.
-        Otherwise a periodic ``step_<global_step>.pt`` checkpoint is
+        Otherwise a periodic ``epoch_<current_epoch>.pt`` checkpoint is
         written (or to ``path`` if explicitly given).
         """
         # Unwrap torch.compile() wrapper so state_dict keys are clean
@@ -147,7 +147,9 @@ class BaseTrainer(ABC, Generic[ConfigT]):
 
         if path is None:
             path = (
-                self.output_dir / "checkpoints" / f"step_{self.global_step}.pt"
+                self.output_dir
+                / "checkpoints"
+                / f"epoch_{self.current_epoch}.pt"
             )
         torch.save(checkpoint, path)
         print(f"Saved checkpoint to {path}")
@@ -174,7 +176,10 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         self.best_loss = checkpoint.get("best_loss", float("inf"))
         self.best_step_or_epoch = checkpoint.get("best_step_or_epoch", 0)
 
-        print(f"Loaded checkpoint from {path} (step {self.global_step})")
+        print(
+            f"Loaded checkpoint from {path} "
+            f"(epoch {self.current_epoch}, step {self.global_step})"
+        )
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
@@ -211,9 +216,9 @@ class BaseTrainer(ABC, Generic[ConfigT]):
 
         import matplotlib.pyplot as plt
 
-        epochs = [entry["epoch"] for entry in self.loss_history]
-        use_epoch = any(epoch > 0 for epoch in epochs)
-        x_key = "epoch" if use_epoch else "step"
+        # All trainers are epoch-based, so metrics are always logged
+        # against an epoch counter.
+        x_key = "epoch"
 
         fig, ax = plt.subplots(figsize=(7, 5))
         for key in loss_keys:
