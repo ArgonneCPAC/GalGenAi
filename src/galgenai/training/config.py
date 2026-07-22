@@ -35,65 +35,37 @@ class BaseTrainingConfig:
 class VAETrainingConfig(BaseTrainingConfig):
     """VAE-specific training configuration."""
 
-    # VAE-specific parameters
     reconstruction_loss_fn: str = "mse"
     beta: float = 1.0
     compute_loss_on_noiseless: bool = False
 
-    # Epoch-based training
     num_epochs: int = 10
-
-    # Validation
     validate_every: int = 1
 
-    # Override defaults for epoch-based training
     log_every: int = 1
     save_every: int = 10
-
-
-@dataclass
-class LCFMTrainingConfig(BaseTrainingConfig):
-    """LCFM-specific training configuration."""
-
-    # LCFM-specific loss
-    beta: float = 0.001
-
-    # Step-based training
-    num_steps: int = 100_000
-    warmup_steps: int = 1000
-
-    # Sampling during training
-    sample_every: int = 5000
-    num_sample_images: int = 16
-
-    # Validation (should be a multiple of log_every)
-    validate_every: int = 500
-
-    # Override defaults for step-based training
-    log_every: int = 100
-    save_every: int = 10_000
-    learning_rate: float = 2e-4
-    weight_decay: float = 0.01
 
 
 @dataclass
 class CFMTrainingConfig(BaseTrainingConfig):
     """CFM-specific training configuration."""
 
-    # Step-based training
-    num_steps: int = 100_000
-    warmup_steps: int = 1000
+    num_epochs: int = 100
+    warmup_epochs: float = 1.0
 
-    # Sampling during training
-    sample_every: int = 5000
+    # OneCycleLR: initial_lr = learning_rate / div_factor
+    div_factor: float = 25.0
+    # If set, the schedule ramps up + anneals down within this many
+    # epochs (< num_epochs) instead of the full run, then holds flat at
+    # the lr_min_factor floor for the remaining epochs.
+    lr_converge_at_epoch: Optional[float] = None
+
+    sample_every: int = 5
     num_sample_images: int = 16
+    validate_every: int = 1
 
-    # Validation (should be a multiple of log_every)
-    validate_every: int = 500
-
-    # Override defaults for step-based training
-    log_every: int = 100
-    save_every: int = 10_000
+    log_every: int = 1
+    save_every: int = 10
     learning_rate: float = 2e-4
     weight_decay: float = 0.01
 
@@ -104,156 +76,67 @@ class CFMTrainingConfig(BaseTrainingConfig):
 class CNFTrainingConfig(BaseTrainingConfig):
     """CNF training config."""
 
-    # Step-based training
-    num_steps: int = 50_000
-    warmup_steps: int = 1000
+    num_epochs: int = 50
+    warmup_epochs: float = 1.0
 
-    # Sampling during training
-    sample_every: int = 5000
+    sample_every: int = 5
     num_sample_latents: int = 64
+    validate_every: int = 1
 
-    # Validation (should be a multiple of log_every)
-    validate_every: int = 500
-
-    # Override defaults for step-based training
-    log_every: int = 100
-    save_every: int = 5_000
+    log_every: int = 1
+    save_every: int = 5
 
 
-# ======================================================================
-# Config loading functions
-# ======================================================================
+def _model_output_dir(config: dict, model_name: str) -> str:
+    """Return the model artifact directory."""
+    return str(Path(config["results_dir"]) / model_name)
 
 
 def load_vae_training_config(
     config_path: Optional[str] = None,
 ) -> VAETrainingConfig:
-    """
-    Load VAE training config from YAML file.
-
-    Parameters
-    ----------
-    config_path : str, optional
-        Path to config file. If None, uses default galgenai_config.yaml
-
-    Returns
-    -------
-    VAETrainingConfig
-        Configuration instance loaded from file
-    """
+    """Load VAE training config from YAML."""
     config = load_config(config_path)
-    training_config = config["training"]
-    vae_config = training_config["vae"]
-
-    # Automatically append /vae to output directory
-    output_dir = (
-        Path(training_config["output_dir"]) / config["run_name"] / "vae"
-    )
+    vae_config = config["training"]["vae"]
 
     return VAETrainingConfig(
-        # VAE-specific
         reconstruction_loss_fn=vae_config["reconstruction_loss_fn"],
         beta=vae_config["beta"],
         compute_loss_on_noiseless=vae_config["compute_loss_on_noiseless"],
         num_epochs=vae_config["epochs"],
         validate_every=vae_config["validate_every"],
-        # Base config
         learning_rate=vae_config["lr"],
         weight_decay=vae_config["weight_decay"],
         max_grad_norm=vae_config["max_grad_norm"],
         lr_min_factor=vae_config.get("lr_min_factor", 0.01),
         log_every=vae_config["log_every"],
         save_every=vae_config["save_every"],
-        output_dir=str(output_dir),
-        checkpoint_path=None,
-        device=None,
-    )
-
-
-def load_lcfm_training_config(
-    config_path: Optional[str] = None,
-) -> LCFMTrainingConfig:
-    """
-    Load LCFM training config from YAML file.
-
-    Parameters
-    ----------
-    config_path : str, optional
-        Path to config file. If None, uses default galgenai_config.yaml
-
-    Returns
-    -------
-    LCFMTrainingConfig
-        Configuration instance loaded from file
-    """
-    config = load_config(config_path)
-    training_config = config["training"]
-    lcfm_config = training_config["lcfm"]
-
-    # Automatically append /lcfm to output directory
-    output_dir = (
-        Path(training_config["output_dir"]) / config["run_name"] / "lcfm"
-    )
-
-    return LCFMTrainingConfig(
-        # LCFM-specific
-        beta=lcfm_config["beta"],
-        num_steps=lcfm_config["steps"],
-        warmup_steps=lcfm_config["warmup"],
-        sample_every=lcfm_config["sample_every"],
-        num_sample_images=lcfm_config["num_sample_images"],
-        validate_every=lcfm_config["validate_every"],
-        # Base config
-        learning_rate=lcfm_config["lr"],
-        weight_decay=lcfm_config["weight_decay"],
-        max_grad_norm=lcfm_config["max_grad_norm"],
-        log_every=lcfm_config["log_every"],
-        save_every=lcfm_config["save_every"],
-        output_dir=str(output_dir),
-        checkpoint_path=None,
-        device=None,
+        output_dir=_model_output_dir(config, "vae"),
     )
 
 
 def load_cfm_training_config(
     config_path: Optional[str] = None,
 ) -> CFMTrainingConfig:
-    """
-    Load CFM training config from YAML file.
-
-    Parameters
-    ----------
-    config_path : str, optional
-        Path to config file. If None, uses default galgenai_config.yaml
-
-    Returns
-    -------
-    CFMTrainingConfig
-        Configuration instance loaded from file
-    """
+    """Load CFM training config from YAML."""
     config = load_config(config_path)
-    training_config = config["training"]
-    cfm_config = training_config["cfm"]
-
-    # Automatically append /cfm to output directory
-    output_dir = Path(training_config["output_dir"]) / "cfm"
+    cfm_config = config["training"]["cfm"]
 
     return CFMTrainingConfig(
-        # CFM-specific
-        num_steps=cfm_config["steps"],
-        warmup_steps=cfm_config["warmup"],
+        num_epochs=cfm_config["epochs"],
+        warmup_epochs=cfm_config["warmup_epochs"],
+        div_factor=cfm_config.get("div_factor", 25.0),
+        lr_converge_at_epoch=cfm_config.get("lr_converge_at_epoch"),
         sample_every=cfm_config["sample_every"],
         num_sample_images=cfm_config["num_sample_images"],
         validate_every=cfm_config["validate_every"],
-        # Base config
         learning_rate=cfm_config["lr"],
         weight_decay=cfm_config["weight_decay"],
         max_grad_norm=cfm_config["max_grad_norm"],
+        lr_min_factor=cfm_config.get("lr_min_factor", 0.01),
         log_every=cfm_config["log_every"],
         save_every=cfm_config["save_every"],
-        output_dir=str(output_dir),
-        checkpoint_path=None,
-        device=None,
+        output_dir=_model_output_dir(config, "cfm"),
         train_on_noiseless=cfm_config["train_on_noiseless"],
     )
 
@@ -261,42 +144,21 @@ def load_cfm_training_config(
 def load_cnf_training_config(
     config_path: Optional[str] = None,
 ) -> CNFTrainingConfig:
-    """
-    Load CNF training config from YAML file.
-
-    Parameters
-    ----------
-    config_path : str, optional
-        Path to config file. If None, uses default galgenai_config.yaml
-
-    Returns
-    -------
-    CNFTrainingConfig
-        Configuration instance loaded from file
-    """
+    """Load CNF training config from YAML."""
     config = load_config(config_path)
-    training_config = config["training"]
-    cnf_config = training_config["cnf"]
-
-    # Automatically append /cnf to output directory
-    output_dir = (
-        Path(training_config["output_dir"]) / config["run_name"] / "cnf"
-    )
+    cnf_config = config["training"]["cnf"]
 
     return CNFTrainingConfig(
-        # CNF-specific
-        num_steps=cnf_config["steps"],
-        warmup_steps=cnf_config["warmup"],
+        num_epochs=cnf_config["epochs"],
+        warmup_epochs=cnf_config["warmup_epochs"],
         sample_every=cnf_config["sample_every"],
         num_sample_latents=cnf_config["num_sample_latents"],
         validate_every=cnf_config["validate_every"],
-        # Base config
         learning_rate=cnf_config["lr"],
         weight_decay=cnf_config["weight_decay"],
         max_grad_norm=cnf_config["max_grad_norm"],
+        lr_min_factor=cnf_config.get("lr_min_factor", 0.01),
         log_every=cnf_config["log_every"],
         save_every=cnf_config["save_every"],
-        output_dir=str(output_dir),
-        checkpoint_path=None,
-        device=None,
+        output_dir=_model_output_dir(config, "cnf"),
     )

@@ -1,5 +1,6 @@
 """Conditional Normalizing Flow trainer implementation."""
 
+import math
 from typing import Any, Dict, Optional
 
 import torch
@@ -9,15 +10,18 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.cnf import ConditionalNormalizingFlow
-from ..models.lcfm import count_parameters
 from ..models.vae import VAEEncoder
 from .base_trainer import BaseTrainer
 from .config import CNFTrainingConfig
 
 
+def _count_trainable_parameters(model: torch.nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
     """
-    Trainer for Conditional Normalizing Flow with step-based training.
+    Trainer for Conditional Normalizing Flow with epoch-based training.
     """
 
     def __init__(
@@ -57,14 +61,14 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         (self.output_dir / "samples").mkdir(exist_ok=True)
 
         # Print model info
-        num_params = count_parameters(model)
+        num_params = _count_trainable_parameters(model)
         print("Conditional Normalizing Flow initialized:")
         print(f"  Trainable parameters: {num_params:,}")
         print(f"  Latent dimension: {model.latent_dim}")
         print(f"  Condition dimension: {model.condition_dim}")
         print(f"  Number of coupling blocks: {model.num_blocks}")
         print(f"  Learning rate: {config.learning_rate}")
-        print(f"  Total training steps: {config.num_steps:,}")
+        print(f"  Total training epochs: {config.num_epochs:,}")
 
     def _setup_optimizer(self):
         """Set up AdamW with cosine annealing (default) or
@@ -79,17 +83,25 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
             betas=(0.9, 0.999),
         )
 
+        # The scheduler advances once per batch, so both the warmup and
+        # the cosine horizon are expressed in optimizer steps.
+        steps_per_epoch = len(self.train_loader)
+        self._warmup_steps = max(
+            1, round(self.config.warmup_epochs * steps_per_epoch)
+        )
+        total_steps = self.config.num_epochs * steps_per_epoch
+
         self.scheduler = CosineAnnealingLR(
             self.optimizer,
-            T_max=self.config.num_steps - self.config.warmup_steps,
+            T_max=max(1, total_steps - self._warmup_steps),
             eta_min=self.config.learning_rate * self.config.lr_min_factor,
         )
 
     def _get_lr_with_warmup(self) -> float:
         """Get current LR accounting for warmup."""
-        if self.global_step < self.config.warmup_steps:
+        if self.global_step < self._warmup_steps:
             return self.config.learning_rate * (
-                self.global_step / self.config.warmup_steps
+                self.global_step / self._warmup_steps
             )
         if self.scheduler is not None:
             return self.scheduler.get_last_lr()[0]
@@ -165,14 +177,49 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
 
         if (
             self.scheduler is not None
-            and self.global_step >= self.config.warmup_steps
+            and self.global_step >= self._warmup_steps
         ):
             self.scheduler.step()
+
+        self.global_step += 1
 
         return {
             "nll_loss": nll_loss.item(),
             "avg_log_prob": log_probs.mean().item(),
             "lr": current_lr,
+        }
+
+    def _train_epoch(self) -> Dict[str, float]:
+        """Train for one epoch, return average metrics."""
+        nll_sum = 0.0
+        log_prob_sum = 0.0
+        num_batches = 0
+        last_lr = self._get_current_lr()
+
+        progress_bar = tqdm(
+            self.train_loader, desc=f"Epoch {self.current_epoch}"
+        )
+
+        for batch in progress_bar:
+            metrics = self._train_step(batch)
+
+            nll_sum += metrics["nll_loss"]
+            log_prob_sum += metrics["avg_log_prob"]
+            last_lr = metrics["lr"]
+            num_batches += 1
+
+            progress_bar.set_postfix(
+                {
+                    "nll": f"{metrics['nll_loss']:.3e}",
+                    "log_p": f"{metrics['avg_log_prob']:.3f}",
+                    "lr": f"{metrics['lr']:.3e}",
+                }
+            )
+
+        return {
+            "nll_loss": nll_sum / num_batches,
+            "avg_log_prob": log_prob_sum / num_batches,
+            "lr": last_lr,
         }
 
     @torch.no_grad()
@@ -268,9 +315,9 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
         }
 
     def train(self):
-        """Main step-based training loop."""
-        print(f"\nStarting training from step {self.global_step}")
-        print(f"Training for {self.config.num_steps - self.global_step} steps")
+        """Main epoch-based training loop."""
+        print(f"\nStarting training from epoch {self.current_epoch}")
+        print(f"Training until epoch {self.config.num_epochs}")
 
         self.model.train()
         if self.device.type == "mps":
@@ -284,114 +331,82 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
             except RuntimeError:
                 print("torch.compile() not available, skipping")
 
-        def infinite_loader():
-            """Infinite data loader generator."""
-            while True:
-                for batch in self.train_loader:
-                    yield batch
+        start_epoch = self.current_epoch + 1
 
-        data_iter = iter(infinite_loader())
-
-        # Running averages for logging
-        running_nll = 0.0
-        running_log_prob = 0.0
-        log_steps = 0
-
-        # Progress bar spanning all steps
-        pbar = tqdm(
-            total=self.config.num_steps,
-            initial=self.global_step,
-            desc="Training CNF",
-            unit="step",
-        )
-
-        while self.global_step < self.config.num_steps:
-            batch = next(data_iter)
-            loss_dict = self._train_step(batch)
-
-            running_nll += loss_dict["nll_loss"]
-            running_log_prob += loss_dict["avg_log_prob"]
-            log_steps += 1
-
-            self.global_step += 1
-            pbar.update(1)
-
-            # Update progress bar with current metrics
-            pbar.set_postfix(
-                {
-                    "nll": f"{loss_dict['nll_loss']:.3e}",
-                    "log_p": f"{loss_dict['avg_log_prob']:.3f}",
-                    "lr": f"{loss_dict['lr']:.3e}",
-                }
+        for epoch in range(start_epoch, self.config.num_epochs + 1):
+            self.current_epoch = epoch
+            print(
+                f"\nEpoch {epoch}/{self.config.num_epochs} "
+                f"(lr: {self._get_current_lr():.3e})"
             )
 
-            # Periodic logging (for metrics tracking, not display)
-            if self.global_step % self.config.log_every == 0:
-                avg_metrics = {
-                    "nll_loss": running_nll / log_steps,
-                    "avg_log_prob": running_log_prob / log_steps,
-                    "lr": loss_dict["lr"],
-                }
+            train_metrics = self._train_epoch()
 
-                # Validation
-                val_metrics = {}
-                if self.global_step % self.config.validate_every == 0:
-                    val_metrics = self.validate()
-                    if val_metrics:
-                        pbar.write(
-                            f"  Step {self.global_step} Val"
-                            f" - NLL: {val_metrics['val_nll_loss']:.3e}"
-                            f", Log P: {val_metrics['val_avg_log_prob']:.3f}"
-                        )
-                        avg_metrics.update(val_metrics)
+            # Check for non-finite loss
+            if not math.isfinite(train_metrics["nll_loss"]):
+                print("\n" + "=" * 60)
+                print("[ERROR] Non-finite loss detected!")
+                print("Stopping training early.")
+                print("=" * 60)
+                break
 
-                    # Also log determinant statistics during validation
-                    log_det_stats = self.compute_log_det_statistics()
-                    pbar.write(
-                        f"  Log det Jacobian: "
-                        f"mean={log_det_stats['log_det_mean']:.2f}, "
-                        f"std={log_det_stats['log_det_std']:.2f}"
-                    )
-                    avg_metrics.update(log_det_stats)
+            print(
+                f"Epoch {epoch} - "
+                f"NLL: {train_metrics['nll_loss']:.3e}, "
+                f"Log P: {train_metrics['avg_log_prob']:.3f}"
+            )
 
-                self._log_metrics(avg_metrics)
-
-                # Track best loss (use validation if available,
-                # otherwise training)
+            # Validation
+            val_metrics = {}
+            if epoch % self.config.validate_every == 0:
+                val_metrics = self.validate()
                 if val_metrics:
-                    current_loss = val_metrics["val_nll_loss"]
-                else:
-                    current_loss = avg_metrics["nll_loss"]
-
-                if current_loss < self.best_loss:
-                    self.best_loss = current_loss
-                    self.best_step_or_epoch = self.global_step
-                    loss_type = "val" if val_metrics else "train"
-                    self.save_checkpoint(is_best=True)
-                    pbar.write(
-                        f"  New best {loss_type} loss"
-                        f" {current_loss:.4f} at step"
-                        f" {self.global_step} — saved best.pt"
+                    print(
+                        f"  Val - NLL: {val_metrics['val_nll_loss']:.3e}"
+                        f", Log P: {val_metrics['val_avg_log_prob']:.3f}"
                     )
-                else:
-                    loss_type = "val" if val_metrics else "train"
-                    pbar.write(
-                        f"  Current {loss_type} loss: {current_loss:.4f} "
-                        f"at step {self.global_step} | "
-                        f"Best: {self.best_loss:.4f} "
-                        f"at step {self.best_step_or_epoch}"
-                    )
+                    train_metrics.update(val_metrics)
 
-                # Reset running stats
-                running_nll = 0.0
-                running_log_prob = 0.0
-                log_steps = 0
+                # Also log determinant statistics during validation
+                log_det_stats = self.compute_log_det_statistics()
+                print(
+                    f"  Log det Jacobian: "
+                    f"mean={log_det_stats['log_det_mean']:.2f}, "
+                    f"std={log_det_stats['log_det_std']:.2f}"
+                )
+                train_metrics.update(log_det_stats)
+
+            # Track best loss (use validation if available,
+            # otherwise training)
+            if val_metrics:
+                current_loss = val_metrics["val_nll_loss"]
+            else:
+                current_loss = train_metrics["nll_loss"]
+            loss_type = "val" if val_metrics else "train"
+
+            if current_loss < self.best_loss:
+                self.best_loss = current_loss
+                self.best_step_or_epoch = epoch
+                self.save_checkpoint(is_best=True)
+                print(
+                    f"  New best {loss_type} loss {current_loss:.4f} "
+                    f"at epoch {epoch} — saved best.pt"
+                )
+            else:
+                print(
+                    f"  Current {loss_type} loss: {current_loss:.4f} "
+                    f"at epoch {epoch} | Best: {self.best_loss:.4f} "
+                    f"at epoch {self.best_step_or_epoch}"
+                )
+
+            if epoch % self.config.log_every == 0:
+                self._log_metrics(train_metrics)
 
             # Sample generation
-            if self.global_step % self.config.sample_every == 0:
-                pbar.write(
+            if epoch % self.config.sample_every == 0:
+                print(
                     f"Generating {self.config.num_sample_latents} "
-                    f"latent samples at step {self.global_step}..."
+                    f"latent samples at epoch {epoch}..."
                 )
                 sample_dict = self.generate_samples(
                     self.config.num_sample_latents
@@ -400,17 +415,17 @@ class CNFTrainer(BaseTrainer[CNFTrainingConfig]):
                 sample_path = (
                     self.output_dir
                     / "samples"
-                    / f"latent_samples_step_{self.global_step}.pt"
+                    / f"latent_samples_epoch_{epoch}.pt"
                 )
                 torch.save(sample_dict, sample_path)
 
             # Checkpointing
-            if self.global_step % self.config.save_every == 0:
+            if epoch % self.config.save_every == 0:
                 self.save_checkpoint()
 
-        pbar.close()
         print("\nTraining complete")
 
         # Save final checkpoint (best.pt already saved
         # whenever a new best was found)
         self.save_checkpoint()
+        self.save_loss_plot()

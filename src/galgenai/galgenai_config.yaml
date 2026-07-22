@@ -1,193 +1,11 @@
-run_name: arcsinh
-cosmos:
-  catalog_path: src/galgenai/cosmos/data/test_catalog_30objects.fits
-  hf_dataset_path: /home/bbiswas/HSC_dataset/
+results_dir: pipeline_output/default
+
+data:
   image_size: 32
-  HST_snr_threshold: 50
-  split_seed: 42 # To split the dataset
-  train_ratio: 0.6
-  val_ratio: 0.2
-  test_ratio: 0.2
-  num_workers: 8
-  invert_mask: true # true: dataset masks use 0=good (or absent); trainers expect 1=valid
-  max_galaxies: 50000 # inluding train + test + val [Some simulation may fail]
-  seed: 42 # To add noise etc.
-  max_fft_size: 512
-  mag_sentinel: 900.0  # Sentinel value for invalid magnitudes
-  redshift_sentinel: -99.0  # Sentinel value for invalid redshift
-  catalog_columns: # These are names of catalog columns
-    mag_cols:
-      - mag_model_hsc-g
-      - mag_model_hsc-r
-      - mag_model_hsc-i
-      - mag_model_hsc-z
-      - mag_model_hsc-y
-    hlr: radius_sersic
-    sersic_n: sersic
-    sersic_ratio: axratio_sersic
-    sersic_angle: angle_sersic
-    ra: ra
-    dec: dec
-    redshift_col: zfinal
-    galid: id
-    snr: snr_hst-f814w
-  normalization:
-    image:
-      linear:
-        min:
-        - -673.4
-        - -918.2
-        - -1822.98
-        - -2117.36
-        - -2305.81
-        max:
-        - 100730.6
-        - 107760.8
-        - 254625.02
-        - 87246.64
-        - 74290.19
-      arcsinh:
-        min:
-        - -0.3
-        - -0.22
-        - -0.17
-        - -0.36
-        - -0.45
-        max:
-        - 4.51
-        - 3.94
-        - 3.86
-        - 3.42
-        - 3.41
-        scale:
-        - 2210.23
-        - 4199.53
-        - 10734.38
-        - 5723.21
-        - 4938.81
-    conditions:
-      cols:
-      - mag_model_hsc-g
-      - mag_model_hsc-r
-      - mag_model_hsc-i
-      - mag_model_hsc-z
-      - mag_model_hsc-y
-      - zfinal
-      - radius_sersic
-      - sersic
-      - axratio_sersic
-      - angle_sersic
-      min:
-      - 18.68
-      - 18.35
-      - 18.11
-      - 17.82
-      - 17.61
-      - 0.0
-      - 0.000985780046533
-      - 0.3
-      - 0.000049997314704
-      - -89.99332091505602
-      max:
-      - 30.35
-      - 27.38
-      - 26.41
-      - 26.93
-      - 29.05
-      - 4.96
-      - 10.847463449937509
-      - 6.199772654376666
-      - 0.9999991470187218
-      - 89.99753429314939
-hsc_mmu:
-  hf_dataset_path: data/hsc_mmu
-  num_workers: 0
-  invert_mask: false # set true if survey writes 1=bad pixel (not 1=valid)
-  train_ratio: 0.8
-  val_ratio: 0.1
-  split_seed: 42
-  normalization:
-    image:
-      linear:
-        min:
-        - 0
-        - 0
-        - 0
-        - 0
-        - 0
-        max:
-        - 2
-        - 2
-        - 2
-        - 2
-        - 2
-training:
-  output_dir: scripts/cosmos_output
-  nx: 32
   batch_size: 64
-  model:
-    in_channels: 5
-    latent_dim: 32
-    base_channels: 16
-  vae:
-    epochs: 30
-    lr: 0.0001
-    lr_min_factor: 0.01  # Minimum LR as fraction of initial LR for CosineAnnealingLR
-    weight_decay: 0.01
-    max_grad_norm: 1.0
-    beta: 1.0e-08
-    save_every: 8
-    validate_every: 5
-    log_every: 1
-    norm_type: arcsinh
-    compute_loss_on_noiseless: True  # If true, compute reconstruction loss on noiseless images
-  lcfm:
-    steps: 100000
-    lr: 0.0002
-    weight_decay: 0.01
-    max_grad_norm: 1.0
-    warmup: 100
-    beta: 0.001
-    sample_every: 500
-    num_sample_images: 16
-    validate_every: 500
-    save_every: 10000
-    log_every: 100
-  cnf:
-    steps: 20000
-    lr: 0.0001
-    lr_min_factor: 0.01  # Minimum LR as fraction of initial LR for CosineAnnealingLR
-    weight_decay: 0.01
-    max_grad_norm: 1.0
-    warmup: 1000
-    num_blocks: 8
-    hidden_dim: 256
-    num_sample_latents: 64
-    sample_every: 1000
-    validate_every: 1000
-    save_every: 5000
-    log_every: 100
-    condition_cols:
-    - mag_model_hsc-g
-    - mag_model_hsc-r
-    - mag_model_hsc-i
-    - mag_model_hsc-z
-    - mag_model_hsc-y
-    - zfinal
-  cfm:
-    steps: 50000
-    lr: 0.001
-    lr_min_factor: 0.01  # Minimum LR as fraction of initial LR for CosineAnnealingLR
-    weight_decay: 0.01
-    max_grad_norm: 1.0
-    warmup: 1000
-    sample_every: 5000
-    num_sample_images: 16
-    train_on_noiseless: True
-    validate_every: 500
-    save_every: 10000
-    log_every: 100
-    condition_cols:
+  in_channels: 5
+  image_norm_type: arcsinh
+  condition_cols:
     - mag_model_hsc-g
     - mag_model_hsc-r
     - mag_model_hsc-i
@@ -198,3 +16,162 @@ training:
     - sersic
     - axratio_sersic
     - angle_sersic
+
+datasets:
+  cosmos:
+    path: /home/bbiswas/HSC_dataset/
+    metadata_file: metadata.csv
+    num_workers: 8
+    invert_mask: true
+    augment_train: true
+    train_ratio: 0.6
+    val_ratio: 0.2
+    split_seed: 42
+    mag_sentinel: 900.0
+    redshift_sentinel: -99.0
+    mag_cols:
+      - mag_model_hsc-g
+      - mag_model_hsc-r
+      - mag_model_hsc-i
+      - mag_model_hsc-z
+      - mag_model_hsc-y
+    redshift_col: zfinal
+    normalization:
+      image:
+        linear:
+          min:
+            - -673.4
+            - -918.2
+            - -1822.98
+            - -2117.36
+            - -2305.81
+          max:
+            - 100730.6
+            - 107760.8
+            - 254625.02
+            - 87246.64
+            - 74290.19
+        arcsinh:
+          min:
+            - -0.3
+            - -0.22
+            - -0.17
+            - -0.36
+            - -0.45
+          max:
+            - 4.51
+            - 3.94
+            - 3.86
+            - 3.42
+            - 3.41
+          scale:
+            - 2210.23
+            - 4199.53
+            - 10734.38
+            - 5723.21
+            - 4938.81
+      conditions:
+        cols:
+          - mag_model_hsc-g
+          - mag_model_hsc-r
+          - mag_model_hsc-i
+          - mag_model_hsc-z
+          - mag_model_hsc-y
+          - zfinal
+          - radius_sersic
+          - sersic
+          - axratio_sersic
+          - angle_sersic
+        min:
+          - 18.68
+          - 18.35
+          - 18.11
+          - 17.82
+          - 17.61
+          - 0.0
+          - 0.000985780046533
+          - 0.3
+          - 0.000049997314704
+          - -89.99332091505602
+        max:
+          - 30.35
+          - 27.38
+          - 26.41
+          - 26.93
+          - 29.05
+          - 4.96
+          - 10.847463449937509
+          - 6.199772654376666
+          - 0.9999991470187218
+          - 89.99753429314939
+
+  hsc_mmu:
+    path: data/hsc_mmu
+    num_workers: 0
+    invert_mask: false
+    train_ratio: 0.8
+    val_ratio: 0.1
+    split_seed: 42
+    normalization:
+      image:
+        linear:
+          min:
+            - 0
+            - 0
+            - 0
+            - 0
+            - 0
+          max:
+            - 2
+            - 2
+            - 2
+            - 2
+            - 2
+
+models:
+  vae:
+    latent_dim: 32
+  cnf:
+    num_blocks: 8
+    hidden_dim: 256
+  cfm:
+    base_channels: 16
+
+training:
+  vae:
+    epochs: 30
+    lr: 0.0001
+    lr_min_factor: 0.01
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    beta: 1.0e-08
+    reconstruction_loss_fn: masked_weighted_mse
+    compute_loss_on_noiseless: true
+    save_every: 8
+    validate_every: 5
+    log_every: 1
+  cnf:
+    epochs: 32
+    lr: 0.0001
+    lr_min_factor: 0.01
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    warmup_epochs: 2
+    num_sample_latents: 64
+    sample_every: 1
+    validate_every: 1
+    save_every: 8
+    log_every: 1
+  cfm:
+    epochs: 64
+    lr: 0.001
+    lr_min_factor: 0.01
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    warmup_epochs: 2
+    sample_every: 8
+    num_sample_images: 16
+    train_on_noiseless: true
+    validate_every: 1
+    save_every: 8
+    log_every: 1
