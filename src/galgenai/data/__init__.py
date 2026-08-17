@@ -1,6 +1,6 @@
 """Dataset and Normalization."""
 
-from .hsc import HSCDataset, get_dataset_and_loaders
+from .hsc import HSCDataset, get_dataset_and_loaders, load_hsc_mmu_dataset
 from .latent import LatentDataset, precompute_latents
 from .normalization import (
     ASinhNormStats,
@@ -24,6 +24,7 @@ from .normalization import (
 __all__ = [
     "HSCDataset",
     "get_dataset_and_loaders",
+    "load_hsc_mmu_dataset",
     "LatentDataset",
     "precompute_latents",
     "ASinhNormStats",

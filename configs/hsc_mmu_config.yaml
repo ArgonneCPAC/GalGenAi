@@ -1,0 +1,125 @@
+# CFM training on real HSC images from the MultiModalUniverse dataset
+# (HSC PDR3 Deep/UltraDeep, i < 22.5).
+#
+# Kept separate from the root galgenai_config.yaml because
+# data.condition_cols and training.cfm are global keys: editing them in
+# place would break scripts/train_cfm_cosmos.py.
+#
+# Run with:
+#   uv run python scripts/train_cfm_hsc_mmu.py \
+#       --config configs/hsc_mmu_config.yaml
+
+results_dir: exp/cfm_hsc_mmu
+
+data:
+  image_size: 32
+  batch_size: 64
+  in_channels: 5
+  image_norm_type: arcsinh
+  # HSC MMU has no redshift and no Sersic parameters, so conditioning is
+  # the five cmodel magnitudes (cond_vec_dim = 5).
+  condition_cols:
+  - g_cmodel_mag
+  - r_cmodel_mag
+  - i_cmodel_mag
+  - z_cmodel_mag
+  - y_cmodel_mag
+
+datasets:
+  hsc_mmu:
+    # Resolved against the repo root by galgenai.config.load_config.
+    # Point this at your local copy (or symlink it in).
+    path: data/hsc_mmu
+    split: train
+    num_workers: 4
+    invert_mask: false   # MMU mask is already 1 = valid
+    augment_train: true
+    train_ratio: 0.8
+    val_ratio: 0.1
+    split_seed: 42
+    # Written by:
+    #   uv run python scripts/compute_norm_stats.py \
+    #       --dataset-type hsc_mmu --config-path configs/hsc_mmu_config.yaml
+    # Flux is in nanomaggy-like units (order 0.01-10), so the COSMOS
+    # constants do not transfer.
+    #
+    # NOTE: measured on the 952 galaxies currently on disk, which are one
+    # spatially contiguous shard rather than a random survey sample.
+    # Recompute once the remaining shards are copied.
+    normalization:
+      image:
+        linear:
+          min:
+          - -0.3
+          - -0.16
+          - -0.31
+          - -0.3
+          - -1.13
+          max:
+          - 53.19
+          - 80.9
+          - 163.37
+          - 329.68
+          - 479.97
+        arcsinh:
+          min:
+          - -0.15
+          - -0.03
+          - -0.03
+          - -0.02
+          - -0.07
+          max:
+          - 4.0
+          - 3.55
+          - 3.59
+          - 3.97
+          - 4.1
+          scale:
+          - 1.95
+          - 4.65
+          - 9.01
+          - 12.49
+          - 15.84
+      conditions:
+        cols:
+        - g_cmodel_mag
+        - r_cmodel_mag
+        - i_cmodel_mag
+        - z_cmodel_mag
+        - y_cmodel_mag
+        min:
+        - 18.54
+        - 17.55
+        - 17.04
+        - 16.71
+        - 16.5
+        max:
+        - 26.19
+        - 25.04
+        - 22.5
+        - 24.09
+        - 24.71
+
+models:
+  cfm:
+    base_channels: 16
+
+training:
+  cfm:
+    # Sized for the full 86,614-galaxy dataset
+    # (steps_per_epoch = ceil(86614 * 0.8 / 64) = 1083).
+    # For a smoke test on a partial copy, drop epochs to ~2 and set
+    # sample_every / save_every to 1.
+    epochs: 1000
+    lr: 1.0E-3
+    lr_min_factor: 1.0E-2
+    warmup_epochs: 10
+    lr_converge_at_epoch: 800
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+    sample_every: 10
+    num_sample_images: 16
+    train_on_noiseless: false   # real data has no noiseless channel
+    validate_every: 1
+    save_every: 100
+    log_every: 1

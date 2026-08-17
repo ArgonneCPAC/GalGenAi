@@ -10,7 +10,7 @@ This script:
 3. Computes image normalization statistics using min-max normalization:
    - Linear: Direct min-max normalization on raw flux
    - Arcsinh: Arcsinh stretch (per-band scale) + min-max normalization
-4. Computes conditional normalization statistics (min-max) - COSMOS only
+4. Computes conditional normalization statistics (min-max)
 5. Saves all stats as YAML files (rounded to 2 decimal places)
 6. Optionally updates the config file with the computed statistics
 
@@ -18,9 +18,9 @@ By default uses a subset of 2000 objects to compute the statistics.
 --n-samples can be used to modify this.
 
 The script reads these parameters from the config file:
-- cosmos.hf_dataset_path: Path to dataset directory
-- training.nx: Crop size for images
-- training.cnf.condition_cols: List of condition columns (COSMOS only)
+- datasets.<name>.path: Path to dataset directory
+- data.image_size: Crop size for images
+- data.condition_cols: List of condition columns
 
 Run with:
 # Minimal example:
@@ -32,17 +32,16 @@ uv run python scripts/compute_norm_stats.py --dataset-type cosmos \
 
 # HSC MMU dataset:
 uv run python scripts/compute_norm_stats.py --dataset-type hsc_mmu \
-        --config-path ./my_config.yaml
+        --config-path configs/hsc_mmu_config.yaml
 """
 
 import argparse
 from pathlib import Path
 import yaml
 
-from datasets import load_from_disk
 from galgenai.config import load_config
 from galgenai.data.cosmos_dataset import load_fits_dataset
-from galgenai.data.hsc import HSCDataset
+from galgenai.data.hsc import HSCDataset, load_hsc_mmu_dataset
 from galgenai.data.normalization import (
     compute_arcsinh_norm_stats,
     compute_linear_norm_stats,
@@ -100,14 +99,16 @@ def update_config_file(config_path: Path, stats_dict: dict, dataset_type: str):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    # Ensure the section and normalization exists
-    if dataset_type not in config:
-        config[dataset_type] = {}
-    if "normalization" not in config[dataset_type]:
-        config[dataset_type]["normalization"] = {}
+    if "datasets" not in config:
+        config["datasets"] = {}
+    if dataset_type not in config["datasets"]:
+        config["datasets"][dataset_type] = {}
 
-    # Update with computed stats
-    config[dataset_type]["normalization"] = stats_dict
+    # Merge into the existing normalization sub-tree so that keys we did
+    # not recompute (e.g. an existing conditions block when running with
+    # --skip-conditions) are preserved rather than wiped.
+    existing = config["datasets"][dataset_type].setdefault("normalization", {})
+    existing.update(stats_dict)
 
     # Write back to file
     with open(config_path, "w") as f:
@@ -129,17 +130,17 @@ def main():
         )
 
     # Extract parameters from config
-    dataset_cfg = cfg.get(args.dataset_type, {})
-    train_cfg = cfg.get("training", {})
+    dataset_cfg = cfg.get("datasets", {}).get(args.dataset_type, {})
+    data_cfg = cfg.get("data", {})
 
-    data_dir = dataset_cfg.get("hf_dataset_path")
+    data_dir = dataset_cfg.get("path")
     if not data_dir:
         raise ValueError(
-            f"{args.dataset_type}.hf_dataset_path not found in config file"
+            f"datasets.{args.dataset_type}.path not found in config file"
         )
 
-    nx = train_cfg.get("nx", 32)
-    condition_cols = train_cfg.get("cnf", {}).get("condition_cols", [])
+    nx = data_cfg.get("image_size", 32)
+    condition_cols = data_cfg.get("condition_cols", [])
 
     # Create output directory
     output_dir = Path("./normalization_stats")
@@ -171,8 +172,11 @@ def main():
     print("-" * 70)
 
     if args.dataset_type == "hsc_mmu":
-        print(f"Loading HSC MMU dataset from: {data_dir}")
-        dataset_raw = load_from_disk(data_dir)
+        dataset_raw = load_hsc_mmu_dataset(
+            data_dir,
+            split=dataset_cfg.get("split", "train"),
+            condition_cols=condition_cols,
+        )
     else:
         print(f"Loading COSMOS FITS dataset from: {data_dir}")
         dataset_raw = load_fits_dataset(
@@ -232,11 +236,7 @@ def main():
     # ------------------------------------------------------------------
     print("\n[3/3] Computing conditional normalization stats...")
 
-    if args.dataset_type == "hsc_mmu":
-        print("  Skipping conditional stats (HSC MMU dataset).")
-        cond_stats = None
-        cond_stats_path = None
-    elif args.skip_conditions:
+    if args.skip_conditions:
         print("  Skipping conditional stats (--skip-conditions flag set).")
         cond_stats = None
         cond_stats_path = None
@@ -294,14 +294,14 @@ def main():
             },
         }
 
+        # Only set the conditions block when we actually computed it, so
+        # a skipped run does not clobber an existing populated block.
         if cond_stats:
             stats_dict["conditions"] = {
                 "cols": cond_stats.cols,
                 "min": [round(x, 2) for x in cond_stats.min.tolist()],
                 "max": [round(x, 2) for x in cond_stats.max.tolist()],
             }
-        else:
-            stats_dict["conditions"] = {}
 
         update_config_file(config_path, stats_dict, args.dataset_type)
 
@@ -325,10 +325,10 @@ Files created:
 
     if args.write_to_config:
         print("\nStatistics written to config file:")
-        print(f"  {args.dataset_type}.normalization.image.linear")
-        print(f"  {args.dataset_type}.normalization.image.arcsinh")
+        print(f"  datasets.{args.dataset_type}.normalization.image.linear")
+        print(f"  datasets.{args.dataset_type}.normalization.image.arcsinh")
         if cond_stats:
-            print(f"  {args.dataset_type}.normalization.conditions")
+            print(f"  datasets.{args.dataset_type}.normalization.conditions")
 
 
 if __name__ == "__main__":

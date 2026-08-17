@@ -1,9 +1,11 @@
+import re
+from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, random_split
-from datasets import Dataset
+from datasets import Dataset, DatasetInfo, concatenate_datasets
 
 from .augmentation import random_rotation_and_flip
 
@@ -35,6 +37,121 @@ def custom_collate_fn(batch):
             batched.append(torch.utils.data.default_collate(samples))
 
     return tuple(batched)
+
+
+def load_hsc_mmu_dataset(
+    data_dir,
+    split: str = "train",
+    format: Optional[str] = "torch",
+    condition_cols: Optional[list] = None,
+    filter_invalid_conditions: bool = True,
+) -> Dataset:
+    """Load an HSC MultiModalUniverse dataset saved by ``save_to_disk``.
+
+    This is the HSC-MMU counterpart to
+    ``cosmos_dataset.load_fits_dataset``: it returns a raw HuggingFace
+    Dataset whose ``image`` column is the nested dict (``flux``,
+    ``ivar``, ``mask``, ``band``, ...) that ``HSCDataset`` consumes,
+    plus every catalog column. Split it with
+    ``cosmos_dataset.make_loaders``.
+
+    Unlike ``datasets.load_from_disk``, this loads whichever Arrow
+    shards are actually present rather than failing on the first missing
+    one. Partial copies of the survey are common (the full dataset is
+    ~94 GB), so a truncated copy stays usable and transparently grows to
+    the full dataset once the remaining shards are synced.
+
+    Parameters:
+    -----------
+    data_dir : str or Path
+        Dataset root. Either a ``DatasetDict`` layout (containing a
+        ``<split>/`` subdirectory) or a bare ``Dataset`` directory
+        holding the ``.arrow`` shards directly. Both are handled.
+    split : str
+        Split subdirectory to look for. Default "train".
+    format : str or None
+        Output format for arrays, as in ``Dataset.with_format``.
+        Options: "torch" (default), "numpy", "tensorflow", or None
+        (Python lists).
+    condition_cols : list of str or None
+        Conditioning column names. Only used to drop rows with invalid
+        conditioning; pass None to skip that check entirely.
+    filter_invalid_conditions : bool
+        If True (default) and ``condition_cols`` is given, drop rows
+        where any conditioning value is non-finite (NaN or inf). HSC MMU
+        uses NaN rather than a sentinel for missing catalog entries.
+
+    Returns:
+    --------
+    datasets.Dataset
+        HuggingFace Dataset with PyTorch tensors
+        (default format="torch").
+    """
+    data_dir = Path(data_dir).expanduser()
+    split_dir = data_dir / split
+    if not split_dir.is_dir():
+        # Bare Dataset layout: shards live directly in data_dir.
+        split_dir = data_dir
+
+    shards = sorted(split_dir.glob("data-*.arrow"))
+    if not shards:
+        raise FileNotFoundError(
+            f"No Arrow shards (data-*.arrow) found in {split_dir}. "
+            "Expected a HuggingFace dataset saved with save_to_disk()."
+        )
+
+    # Shard names encode the expected total: data-00000-of-00091.arrow
+    n_expected = None
+    match = re.search(r"-of-(\d+)\.arrow$", shards[0].name)
+    if match:
+        n_expected = int(match.group(1))
+
+    print(f"Loading HSC MMU dataset from: {split_dir}")
+    if n_expected is not None and len(shards) < n_expected:
+        print(
+            f"  WARNING: only {len(shards)}/{n_expected} Arrow shards are "
+            f"present. Loading the available subset; copy the missing "
+            f"shards to train on the full dataset."
+        )
+
+    info = DatasetInfo.from_directory(str(split_dir))
+    parts = [Dataset.from_file(str(p), info=info) for p in shards]
+    dataset = parts[0] if len(parts) == 1 else concatenate_datasets(parts)
+
+    n_loaded = len(dataset)
+    msg = f"  Loaded {n_loaded:,} galaxies from {len(shards)} shard(s)"
+    if info.splits is not None and split in info.splits:
+        # Note: this is the count recorded at build time, which may be
+        # stale for a partial copy. Reported for context only.
+        msg += f" (dataset_info reports {info.splits[split].num_examples:,})"
+    print(msg)
+
+    if condition_cols and filter_invalid_conditions:
+        # Project to the scalar conditioning columns before scanning, so
+        # we never materialise the image arrays, then use select() to
+        # keep the filtering lazy (an indices mapping, not a rewrite).
+        cond_tbl = dataset.select_columns(list(condition_cols))
+        cond_tbl = cond_tbl.with_format("numpy")[:]
+        values = np.stack(
+            [
+                np.asarray(cond_tbl[c], dtype=np.float64)
+                for c in condition_cols
+            ],
+            axis=1,
+        )
+        valid = np.isfinite(values).all(axis=1)
+        n_invalid = int((~valid).sum())
+        if n_invalid > 0:
+            dataset = dataset.select(np.flatnonzero(valid).tolist())
+            print(
+                f"  Filtered {n_invalid} galaxies with non-finite "
+                f"conditioning values. Remaining: {len(dataset):,}"
+            )
+
+    if format is not None:
+        dataset = dataset.with_format(format)
+
+    return dataset
 
 
 class HSCDataset(torch.utils.data.Dataset):
@@ -146,10 +263,10 @@ class HSCDataset(torch.utils.data.Dataset):
             # Extract and crop inverse variance
             ivar = self.crop(image_data["ivar"])
 
-            # Extract and crop mask
-            mask = image_data["mask"]
-            if isinstance(mask, np.ndarray):
-                mask = torch.as_tensor(mask, dtype=torch.float32)
+            # Cast unconditionally: HSC MMU stores the mask as bool, and
+            # bool tensors support neither ``1 - mask`` nor the
+            # arithmetic the weighted-MSE losses do downstream.
+            mask = torch.as_tensor(image_data["mask"], dtype=torch.float32)
             mask = self.crop(mask)
             if self.invert_mask:
                 mask = 1 - mask
