@@ -102,8 +102,11 @@ def main():
     print(f"Image normalization stats saved to: {norm_stats_path}")
 
     print(f"\nConditioning columns ({condition_dim}): {condition_cols}")
-    conditional_norm_fn, cond_stats = get_conditional_norm_fn(
-        config=norm_cfg["conditions"],
+    conditional_norm_fn, conditional_denorm_fn, cond_stats = (
+        get_conditional_norm_fn(
+            config=norm_cfg["conditions"],
+            return_denorm=True,
+        )
     )
     if condition_cols != cond_stats.cols:
         raise ValueError(
@@ -153,6 +156,8 @@ def main():
         train_loader=train_loader,
         config=cfm_config,
         val_loader=val_loader,
+        condition_labels=condition_cols,
+        condition_denorm_fn=conditional_denorm_fn,
     )
     cfm_trainer.train()
 

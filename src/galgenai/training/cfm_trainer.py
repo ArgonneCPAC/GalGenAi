@@ -1,7 +1,7 @@
 """CFM trainer implementation."""
 
 import math
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 import torch
 from torch.optim import AdamW
@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..models.cfm import CFM, count_parameters
+from ..utils.plotting import plot_real_vs_generated
 from .base_trainer import BaseTrainer
 from .config import CFMTrainingConfig
 
@@ -92,8 +93,17 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         train_loader: DataLoader,
         config: CFMTrainingConfig,
         val_loader: Optional[DataLoader] = None,
+        condition_labels: Optional[Sequence[str]] = None,
+        condition_denorm_fn: Optional[Callable] = None,
     ):
         super().__init__(model, train_loader, config, val_loader)
+
+        # Only used to annotate the sample comparison grids: the
+        # conditioning column names, and a map back to physical units
+        # so the annotations read as magnitudes rather than as the
+        # normalized values fed to the model.
+        self.condition_labels = condition_labels
+        self.condition_denorm_fn = condition_denorm_fn
 
         # Additional CFM-specific directories
         (self.output_dir / "samples").mkdir(exist_ok=True)
@@ -198,12 +208,17 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
     @torch.no_grad()
     def generate_samples(
         self, num_samples: int = 16
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Generate samples for visualization.
 
         Pulls a batch from the validation loader (or training loader as
         fallback), takes the first ``num_samples`` conditioning vectors,
         and runs the model's Euler sampler.
+
+        Returns ``(samples, conditioning, real)``, where ``real[i]`` is
+        the image the conditioning vector ``conditioning[i]`` was
+        measured on, so samples and real images can be compared
+        pairwise.
         """
         self.model.eval()
 
@@ -213,8 +228,8 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
             else self.train_loader
         )
         batch = next(iter(loader))
-        _, _, _, f = _extract_cfm_batch(batch, self.device)
-        f = f[:num_samples]
+        real, _, _, f = _extract_cfm_batch(batch, self.device)
+        real, f = real[:num_samples], f[:num_samples]
 
         raw_model = getattr(self.model, "_orig_mod", self.model)
         samples = raw_model.sample(
@@ -224,7 +239,7 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
             num_steps=50,
         )
         self.model.train()
-        return samples, f
+        return samples, f, real
 
     def train(self):
         """Main epoch-based training loop."""
@@ -308,11 +323,14 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
 
             if epoch % self.config.log_every == 0:
                 self._log_metrics(train_metrics)
+                # Refreshed every logging epoch so the curve can be
+                # watched while the run is still going.
+                self.save_loss_plot()
 
             # Sample generation
             if epoch % self.config.sample_every == 0:
                 print(f"Generating samples at epoch {epoch}...")
-                samples, conditioning = self.generate_samples(
+                samples, conditioning, real = self.generate_samples(
                     self.config.num_sample_images
                 )
 
@@ -323,9 +341,20 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
                     {
                         "samples": samples.cpu(),
                         "conditioning": conditioning.cpu(),
+                        "real": real.cpu(),
                     },
                     sample_path,
                 )
+                grid_path = plot_real_vs_generated(
+                    real,
+                    samples,
+                    self.output_dir / "samples" / f"grid_epoch_{epoch}.png",
+                    conditioning=conditioning,
+                    condition_labels=self.condition_labels,
+                    condition_denorm_fn=self.condition_denorm_fn,
+                    title=f"CFM samples, epoch {epoch}",
+                )
+                print(f"Saved sample grid to {grid_path}")
 
             # Checkpointing
             if epoch % self.config.save_every == 0:

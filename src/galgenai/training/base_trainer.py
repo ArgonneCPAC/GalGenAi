@@ -202,7 +202,13 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         self.loss_history.append(entry)
 
     def save_loss_plot(self, filename: str = "loss_history.png"):
-        """Save a simple loss-history plot when loss metrics exist."""
+        """Save a loss-history plot with the LR schedule overlaid.
+
+        Losses are drawn against the epoch counter on the left axis;
+        when the history carries an ``lr`` entry, the learning rate is
+        overlaid on a right-hand log axis so a loss plateau can be read
+        against where the schedule was at the time.
+        """
         loss_keys = sorted(
             {
                 key
@@ -220,16 +226,19 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         # against an epoch counter.
         x_key = "epoch"
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        for key in loss_keys:
+        def series(key):
             points = [
                 (entry[x_key], entry[key])
                 for entry in self.loss_history
-                if key in entry
+                if key in entry and isinstance(entry[key], (int, float))
             ]
-            if not points:
+            return zip(*points, strict=True) if points else (None, None)
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        for key in loss_keys:
+            xs, ys = series(key)
+            if xs is None:
                 continue
-            xs, ys = zip(*points, strict=True)
             ax.plot(xs, ys, label=key, marker="o", ms=3, lw=1)
 
         ax.set_xlabel(x_key)
@@ -241,8 +250,22 @@ class BaseTrainer(ABC, Generic[ConfigT]):
             if key in entry
         ):
             ax.set_yscale("log")
-        ax.legend()
         ax.grid(True, which="both", alpha=0.3)
+        handles, labels = ax.get_legend_handles_labels()
+
+        lr_xs, lr_ys = series("lr")
+        if lr_xs is not None:
+            ax_lr = ax.twinx()
+            ax_lr.plot(lr_xs, lr_ys, color="0.4", ls="--", lw=1, label="lr")
+            ax_lr.set_ylabel("learning rate", color="0.4")
+            ax_lr.tick_params(axis="y", labelcolor="0.4")
+            if all(y > 0 for y in lr_ys):
+                ax_lr.set_yscale("log")
+            lr_handles, lr_labels = ax_lr.get_legend_handles_labels()
+            handles += lr_handles
+            labels += lr_labels
+
+        ax.legend(handles, labels, loc="best")
         fig.tight_layout()
 
         output_path = self.output_dir / filename
