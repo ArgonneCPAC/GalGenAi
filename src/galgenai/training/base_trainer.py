@@ -176,10 +176,7 @@ class BaseTrainer(ABC, Generic[ConfigT]):
         self.best_loss = checkpoint.get("best_loss", float("inf"))
         self.best_step_or_epoch = checkpoint.get("best_step_or_epoch", 0)
 
-        print(
-            f"Loaded checkpoint from {path} "
-            f"(epoch {self.current_epoch}, step {self.global_step})"
-        )
+        print(f"Loaded checkpoint from {path} (step {self.global_step})")
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
