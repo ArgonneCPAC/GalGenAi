@@ -16,7 +16,8 @@ from galgenai.config import (
     load_config,
     resolve_config_path,
 )
-from galgenai.data.cosmos_dataset import load_fits_dataset, make_loaders
+from galgenai.data.cosmos_dataset import make_loaders
+from galgenai_sims import load_fits_dataset
 from galgenai.data.normalization import (
     get_conditional_norm_fn,
     get_image_norm_fn,

@@ -41,8 +41,8 @@ import yaml
 
 from datasets import load_from_disk
 from galgenai.config import load_config
-from galgenai.data.cosmos_dataset import load_fits_dataset
 from galgenai.data.hsc import HSCDataset
+from galgenai_sims import load_fits_dataset
 from galgenai.data.normalization import (
     compute_arcsinh_norm_stats,
     compute_linear_norm_stats,
