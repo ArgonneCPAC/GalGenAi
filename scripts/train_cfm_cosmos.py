@@ -59,7 +59,21 @@ def main():
     nx = data_cfg["image_size"]
     batch_size = data_cfg["batch_size"]
     in_channels = data_cfg["in_channels"]
-    condition_cols = data_cfg["condition_cols"]
+
+    # Get conditioning mode and select appropriate columns
+    conditioning_mode = data_cfg.get("conditioning_mode", "sersic")
+    if conditioning_mode == "bulge+disk":
+        condition_cols = data_cfg["condition_cols_bulge_disk"]
+        print("Using bulge+disk conditioning mode")
+    elif conditioning_mode == "sersic":
+        condition_cols = data_cfg["condition_cols_sersic"]
+        print("Using Sersic conditioning mode")
+    else:
+        raise ValueError(
+            f"Unknown conditioning_mode: {conditioning_mode}. "
+            f"Must be 'sersic' or 'bulge+disk'"
+        )
+
     image_norm_type = data_cfg["image_norm_type"]
     condition_dim = len(condition_cols)
 
@@ -67,12 +81,24 @@ def main():
     print(f"Results directory: {results_dir}")
     print(f"Copied config to: {copied_config}")
 
+    # Get magnitude columns based on conditioning mode
+    if conditioning_mode == "bulge+disk":
+        # For bulge+disk, check both bulge and disk magnitude columns
+        # note: for cosmos web disks, mags are slipped to 50
+        # hence it is not necessary but still keeping it for now.
+        mag_cols_to_check = (
+            cosmos_cfg["mag_bulge_cols"] + cosmos_cfg["mag_disk_cols"]
+        )
+    else:
+        # For sersic, check total magnitude columns
+        mag_cols_to_check = cosmos_cfg["mag_cols"]
+
     dataset_path = cosmos_cfg["path"]
     print(f"\nLoading FITS dataset from: {dataset_path}")
     dataset_raw = load_fits_dataset(
         dataset_path,
         metadata_file=cosmos_cfg.get("metadata_file", "metadata.csv"),
-        mag_cols=cosmos_cfg["mag_cols"],
+        mag_cols=mag_cols_to_check,
         redshift_col=cosmos_cfg["redshift_col"],
         mag_sentinel=cosmos_cfg.get("mag_sentinel", 999.0),
         redshift_sentinel=cosmos_cfg.get("redshift_sentinel", -99.0),
@@ -103,13 +129,20 @@ def main():
     print(f"Image normalization stats saved to: {norm_stats_path}")
 
     print(f"\nConditioning columns ({condition_dim}): {condition_cols}")
+
+    # Select normalization config based on conditioning mode
+    if conditioning_mode == "bulge+disk":
+        cond_norm_cfg = norm_cfg["conditions_bulge_disk"]
+    else:  # sersic
+        cond_norm_cfg = norm_cfg["conditions_sersic"]
+
     conditional_norm_fn, cond_stats = get_conditional_norm_fn(
-        config=norm_cfg["conditions"],
+        config=cond_norm_cfg,
     )
     if condition_cols != cond_stats.cols:
         raise ValueError(
             f"Configured condition_cols {condition_cols} do not match "
-            f"normalization.conditions.cols {cond_stats.cols}"
+            f"normalization config cols {cond_stats.cols}"
         )
     cond_stats_path = results_dir / "cond_stats.yaml"
     save_conditional_stats(cond_stats, cond_stats_path)
