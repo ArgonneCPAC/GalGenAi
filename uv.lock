@@ -787,6 +787,7 @@ source = { editable = "." }
 dependencies = [
     { name = "astropy" },
     { name = "datasets" },
+    { name = "galgenai-sims" },
     { name = "galsim" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -818,6 +819,7 @@ investigate = [
 requires-dist = [
     { name = "astropy" },
     { name = "datasets", specifier = ">=4.4.1" },
+    { name = "galgenai-sims", git = "https://github.com/b-biswas/galgenai-sims" },
     { name = "galsim" },
     { name = "ipympl", marker = "extra == 'investigate'", specifier = ">=0.9.8" },
     { name = "jupyter", marker = "extra == 'investigate'", specifier = ">=1.1.1" },
@@ -839,6 +841,21 @@ dev = [
     { name = "ruff", specifier = ">=0.14.3" },
 ]
 investigate = [{ name = "jupytext", specifier = ">=1.18.1" }]
+
+[[package]]
+name = "galgenai-sims"
+version = "0.1.0"
+source = { git = "https://github.com/b-biswas/galgenai-sims#3f7ef3cd6e0cbad83482013fce7c1d8969fb5b47" }
+dependencies = [
+    { name = "astropy" },
+    { name = "datasets" },
+    { name = "galsim" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pyyaml" },
+    { name = "surveycodex" },
+    { name = "tqdm" },
+]
 
 [[package]]
 name = "galsim"

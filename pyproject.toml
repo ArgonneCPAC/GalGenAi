@@ -20,8 +20,11 @@ dependencies = [
     "galsim",
     "surveycodex",
     "photutils>=3.0.0",
-    "galgenai-sims @ git+https://github.com/b-biswas/galgenai-sims.git@main",
+    "galgenai-sims",
 ]
+
+[tool.uv.sources]
+galgenai-sims = {git = "https://github.com/b-biswas/galgenai-sims"}
 
 [project.scripts]
 galgenai = "galgenai:main"
