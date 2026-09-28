@@ -5,7 +5,7 @@ data:
   batch_size: 64
   in_channels: 5
   image_norm_type: arcsinh
-  conditioning_mode: sersic
+  conditioning_mode: sersic # or choose bulge+disk
   condition_cols_sersic:
     - mag_model_hsc-g
     - mag_model_hsc-r
