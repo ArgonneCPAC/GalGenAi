@@ -10,6 +10,8 @@ Run with:
 import argparse
 from pathlib import Path
 
+import torch
+
 from galgenai import get_device
 from galgenai.config import (
     copy_config_to_results,
@@ -26,6 +28,8 @@ from galgenai.data.normalization import (
 )
 from galgenai.models import CFM
 from galgenai.training import CFMTrainer, load_cfm_training_config
+
+torch.set_float32_matmul_precision("high")
 
 
 def parse_args() -> argparse.Namespace:
