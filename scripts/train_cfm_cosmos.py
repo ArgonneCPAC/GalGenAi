@@ -163,6 +163,7 @@ def main():
         conditional_norm_fn=conditional_norm_fn,
         invert_mask=cosmos_cfg.get("invert_mask", False),
         return_noiseless_flux=cfm_train_cfg["train_on_noiseless"],
+        load_all_in_memory=cosmos_cfg.get("load_all_in_memory", False),
     )
     print(f"Crop size: {nx}x{nx} px")
     print(f"Batches: {len(train_loader)} train / {len(val_loader)} val")
