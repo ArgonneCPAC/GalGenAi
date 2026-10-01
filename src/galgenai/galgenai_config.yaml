@@ -39,6 +39,9 @@ datasets:
     path: /home/bbiswas/HSC_dataset/
     metadata_file: metadata.csv
     num_workers: 8
+    # Decode the dataset into RAM once at startup (much faster per
+    # sample, at the cost of memory)
+    load_all_in_memory: false
     invert_mask: true
     augment_train: true
     train_ratio: 0.6

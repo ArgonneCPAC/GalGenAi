@@ -8,7 +8,11 @@ Run with:
 """
 
 import argparse
+import gc
 from pathlib import Path
+
+import torch
+from torch._inductor.async_compile import shutdown_compile_workers
 
 from galgenai import get_device
 from galgenai.config import (
@@ -26,6 +30,8 @@ from galgenai.data.normalization import (
 )
 from galgenai.models import CFM
 from galgenai.training import CFMTrainer, load_cfm_training_config
+
+torch.set_float32_matmul_precision("high")
 
 
 def parse_args() -> argparse.Namespace:
@@ -163,9 +169,11 @@ def main():
         conditional_norm_fn=conditional_norm_fn,
         invert_mask=cosmos_cfg.get("invert_mask", False),
         return_noiseless_flux=cfm_train_cfg["train_on_noiseless"],
+        load_all_in_memory=cosmos_cfg.get("load_all_in_memory", False),
     )
     print(f"Crop size: {nx}x{nx} px")
     print(f"Batches: {len(train_loader)} train / {len(val_loader)} val")
+    print(f"\t(Batch size: {batch_size})")
     if test_loader is not None:
         print(f"         {len(test_loader)} test")
 
@@ -189,6 +197,13 @@ def main():
         val_loader=val_loader,
     )
     cfm_trainer.train()
+
+    # Shut down background workers explicitly instead of leaving it to
+    # interpreter teardown, where persistent DataLoader workers and the
+    # inductor compile pool can deadlock and hang the process at exit.
+    del cfm_trainer, train_loader, val_loader, test_loader
+    gc.collect()
+    shutdown_compile_workers()
 
     print("\n" + "=" * 60)
     print("DONE")

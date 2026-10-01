@@ -216,8 +216,7 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
         _, _, _, f = _extract_cfm_batch(batch, self.device)
         f = f[:num_samples]
 
-        raw_model = getattr(self.model, "_orig_mod", self.model)
-        samples = raw_model.sample(
+        samples = self.model.sample(
             batch_size=f.shape[0],
             device=self.device,
             f=f,
@@ -237,9 +236,13 @@ class CFMTrainer(BaseTrainer[CFMTrainingConfig]):
                 "torch.compile() skipped on MPS (inductor Metal backend bug)"
             )
         else:
+            # Compile the velocity network in place rather than wrapping
+            # the CFM: the trainer calls compute_loss()/sample(), which
+            # would bypass a compiled forward(). In-place compilation
+            # also keeps state_dict keys unchanged.
             try:
-                self.model = torch.compile(self.model)
-                print("Model compiled with torch.compile()")
+                self.model.velocity_net.compile()
+                print("Velocity network compiled with torch.compile()")
             except RuntimeError:
                 print("torch.compile() not available, skipping")
 
