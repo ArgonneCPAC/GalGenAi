@@ -8,9 +8,11 @@ Run with:
 """
 
 import argparse
+import gc
 from pathlib import Path
 
 import torch
+from torch._inductor.async_compile import shutdown_compile_workers
 
 from galgenai import get_device
 from galgenai.config import (
@@ -194,6 +196,13 @@ def main():
         val_loader=val_loader,
     )
     cfm_trainer.train()
+
+    # Shut down background workers explicitly instead of leaving it to
+    # interpreter teardown, where persistent DataLoader workers and the
+    # inductor compile pool can deadlock and hang the process at exit.
+    del cfm_trainer, train_loader, val_loader, test_loader
+    gc.collect()
+    shutdown_compile_workers()
 
     print("\n" + "=" * 60)
     print("DONE")
