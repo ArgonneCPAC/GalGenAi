@@ -173,6 +173,7 @@ def main():
     )
     print(f"Crop size: {nx}x{nx} px")
     print(f"Batches: {len(train_loader)} train / {len(val_loader)} val")
+    print(f"\t(Batch size: {batch_size})")
     if test_loader is not None:
         print(f"         {len(test_loader)} test")
 
