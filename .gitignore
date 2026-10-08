@@ -13,7 +13,7 @@ wheels/
 # Data and models
 /data/
 /notebooks/data/
-*.pt
+epoch*.pt
 *.pth
 *.ckpt
 
