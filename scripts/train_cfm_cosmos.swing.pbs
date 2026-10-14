@@ -1,0 +1,14 @@
+#!/bin/bash -l
+#PBS -N galgenai-bd
+#PBS -A cosmo_ai
+#PBS -l select=1:ngpus=1
+#PBS -j oe
+#PBS -l walltime=24:00:00
+
+cd $PBS_O_WORKDIR
+echo Working directory is $PBS_O_WORKDIR
+
+source .venv/bin/activate
+
+python scripts/train_cfm_cosmos.py --config ./config_bd.yaml
+exit 0

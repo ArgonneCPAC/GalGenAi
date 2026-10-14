@@ -1,0 +1,207 @@
+results_dir: exp/cfm_bd_1001_lolr
+
+data:
+  image_size: 32
+  batch_size: 512
+  in_channels: 5
+  image_norm_type: arcsinh
+  conditioning_mode: bulge+disk
+  condition_cols_sersic:
+    - mag_model_hsc-g
+    - mag_model_hsc-r
+    - mag_model_hsc-i
+    - mag_model_hsc-z
+    - mag_model_hsc-y
+    - zfinal
+    - radius_sersic
+    - sersic
+    - axratio_sersic
+    - angle_sersic
+  condition_cols_bulge_disk:
+    - mag_model_bulge_hsc-g
+    - mag_model_bulge_hsc-r
+    - mag_model_bulge_hsc-i
+    - mag_model_bulge_hsc-z
+    - mag_model_bulge_hsc-y
+    - mag_model_disk_hsc-g
+    - mag_model_disk_hsc-r
+    - mag_model_disk_hsc-i
+    - mag_model_disk_hsc-z
+    - mag_model_disk_hsc-y
+    - zfinal
+    - bulge_radius_deg
+    - disk_radius_deg
+    - bulge_axratio
+    - disk_axratio
+    - angle_bd
+datasets:
+  cosmos:
+    path: /home/fkeruzore/HSC_bd/
+    metadata_file: metadata.csv
+    num_workers: 16
+    load_all_in_memory: true
+    invert_mask: true
+    augment_train: false
+    train_ratio: 0.6
+    val_ratio: 0.2
+    split_seed: 42
+    mag_sentinel: 999.0
+    redshift_sentinel: -99.0
+    mag_cols:
+      - mag_model_hsc-g
+      - mag_model_hsc-r
+      - mag_model_hsc-i
+      - mag_model_hsc-z
+      - mag_model_hsc-y
+    mag_bulge_cols:
+      - mag_model_bulge_hsc-g
+      - mag_model_bulge_hsc-r
+      - mag_model_bulge_hsc-i
+      - mag_model_bulge_hsc-z
+      - mag_model_bulge_hsc-y
+    mag_disk_cols:
+      - mag_model_disk_hsc-g
+      - mag_model_disk_hsc-r
+      - mag_model_disk_hsc-i
+      - mag_model_disk_hsc-z
+      - mag_model_disk_hsc-y
+    redshift_col: zfinal
+    normalization:
+      image:
+        linear:
+          min:
+            - -673.4
+            - -918.2
+            - -1822.98
+            - -2117.36
+            - -2305.81
+          max:
+            - 100730.6
+            - 107760.8
+            - 254625.02
+            - 87246.64
+            - 74290.19
+        arcsinh:
+          min:
+            - -0.3
+            - -0.22
+            - -0.17
+            - -0.36
+            - -0.45
+          max:
+            - 4.51
+            - 3.94
+            - 3.86
+            - 3.42
+            - 3.41
+          scale:
+            - 2210.23
+            - 4199.53
+            - 10734.38
+            - 5723.21
+            - 4938.81
+      conditions_sersic:
+        cols:
+          - mag_model_hsc-g
+          - mag_model_hsc-r
+          - mag_model_hsc-i
+          - mag_model_hsc-z
+          - mag_model_hsc-y
+          - zfinal
+          - radius_sersic
+          - sersic
+          - axratio_sersic
+          - angle_sersic
+        min:
+          - 18.68
+          - 18.35
+          - 18.11
+          - 17.82
+          - 17.61
+          - 0.0
+          - 0.000985780046533
+          - 0.3
+          - 0.000049997314704
+          - -89.99332091505602
+        max:
+          - 30.35
+          - 27.38
+          - 26.41
+          - 26.93
+          - 29.05
+          - 4.96
+          - 10.847463449937509
+          - 6.199772654376666
+          - 0.9999991470187218
+          - 89.99753429314939
+      conditions_bulge_disk:
+        cols:
+          - mag_model_bulge_hsc-g
+          - mag_model_bulge_hsc-r
+          - mag_model_bulge_hsc-i
+          - mag_model_bulge_hsc-z
+          - mag_model_bulge_hsc-y
+          - mag_model_disk_hsc-g
+          - mag_model_disk_hsc-r
+          - mag_model_disk_hsc-i
+          - mag_model_disk_hsc-z
+          - mag_model_disk_hsc-y
+          - zfinal
+          - bulge_radius_deg
+          - disk_radius_deg
+          - bulge_axratio
+          - disk_axratio
+          - angle_bd
+        min:
+          - 20.11
+          - 19.16
+          - 18.7
+          - 18.93
+          - 18.6
+          - 19.11
+          - 19.11
+          - 19.11
+          - 18.54
+          - 18.29
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.3
+          - 0.1
+          - -89.73
+        max:
+          - 42.34
+          - 37.25
+          - 37.27
+          - 35.82
+          - 35.87
+          - 50.0
+          - 50.0
+          - 50.0
+          - 50.0
+          - 50.0
+          - 4.8
+          - 10.01
+          - 11.35
+          - 1.0
+          - 1.0
+          - 89.85
+models:
+  cfm:
+    base_channels: 16
+
+training:
+  cfm:
+    epochs: 4096
+    lr: 5.0e-4            # Max LR
+    lr_min_factor: 2.0e-2 # decay ends at this * lr
+    warmup_epochs: 8      # Epochs in LR ramp up from 0 to lr
+    weight_decay: 0.01    # Adamw's weight decay
+    max_grad_norm: 1.0    # Gradient norm clipping
+    sample_every: 128
+    num_sample_images: 16
+    train_on_noiseless: true
+    validate_every: 1
+    save_every: 64
+    log_every: 1
+
