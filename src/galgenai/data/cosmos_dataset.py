@@ -5,6 +5,7 @@ from datasets import Dataset
 from torch.utils.data import DataLoader, random_split
 
 from galgenai.data.hsc import HSCDataset, custom_collate_fn
+from galgenai.data.in_memory import InMemoryDataset
 
 # Import load_fits_dataset from the simulation package
 # This function loads FITS datasets produced by galgenai-sims
@@ -29,6 +30,7 @@ def make_loaders(
     shuffle: bool = True,
     invert_mask: bool = False,
     augment_train: bool = False,
+    load_all_in_memory: bool = False,
 ):
     """Build train/val/test DataLoaders from a raw dataset.
 
@@ -85,6 +87,12 @@ def make_loaders(
     augment_train: If True, apply random rotations and
         flips to training data only. Validation and test
         data are never augmented. Default False.
+    load_all_in_memory: If True, decode the needed image fields and
+        conditioning columns into tensors once, up front, instead of
+        reading rows from the Arrow-backed dataset on every access.
+        Much faster per sample (removes the data-loading bottleneck)
+        at the cost of holding the dataset in RAM; worker processes
+        share it via copy-on-write. Default False.
 
     Returns:
     --------
@@ -100,6 +108,20 @@ def make_loaders(
 
     # Determine if pin_memory should be used (only supported on CUDA)
     use_pin_memory = torch.cuda.is_available()
+
+    if load_all_in_memory:
+        image_fields = ["flux"]
+        if return_aux_data:
+            image_fields += ["ivar", "mask"]
+        if return_noiseless_flux:
+            image_fields.append("noiseless")
+        print(f"Loading {len(dataset_raw)} galaxies into memory...")
+        dataset_raw = InMemoryDataset(
+            dataset_raw,
+            image_fields=image_fields,
+            columns=condition_cols,
+        )
+        print(f"Loaded {dataset_raw.nbytes() / 1e9:.2f} GB into memory")
 
     # Split raw dataset first
     # This is to apply different augmentation to train vs val/test

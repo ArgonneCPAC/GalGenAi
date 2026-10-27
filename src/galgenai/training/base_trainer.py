@@ -213,37 +213,81 @@ class BaseTrainer(ABC, Generic[ConfigT]):
 
         import matplotlib.pyplot as plt
 
-        # All trainers are epoch-based, so metrics are always logged
-        # against an epoch counter.
-        x_key = "epoch"
-
-        fig, ax = plt.subplots(figsize=(7, 5))
-        for key in loss_keys:
+        def series(key):
             points = [
-                (entry[x_key], entry[key])
+                (entry["step"], entry[key])
                 for entry in self.loss_history
                 if key in entry
             ]
-            if not points:
-                continue
-            xs, ys = zip(*points, strict=True)
-            ax.plot(xs, ys, label=key, marker="o", ms=3, lw=1)
+            return zip(*points, strict=True) if points else None
 
-        ax.set_xlabel(x_key)
-        ax.set_ylabel("loss")
-        if all(
-            entry[key] > 0
-            for entry in self.loss_history
-            for key in loss_keys
-            if key in entry
-        ):
-            ax.set_yscale("log")
-        ax.legend()
-        ax.grid(True, which="both", alpha=0.3)
-        fig.tight_layout()
+        # Train metrics in C0, val metrics in C1; multiple loss terms
+        # (e.g. VAE recon/kl) are told apart by linestyle.
+        train_keys = [k for k in loss_keys if not k.startswith("val_")]
+        val_keys = [k for k in loss_keys if k.startswith("val_")]
+        linestyles = ["-", "--", ":", "-."]
 
-        output_path = self.output_dir / filename
-        fig.savefig(output_path, dpi=150)
+        with plt.style.context("petroff10"):
+            fig, ax = plt.subplots(figsize=(7, 5))
+            lines = []
+            for i, key in enumerate(train_keys):
+                if (xy := series(key)) is None:
+                    continue
+                lines += ax.plot(
+                    *xy,
+                    color="C0",
+                    ls=linestyles[i % len(linestyles)],
+                    label=key,
+                )
+            for i, key in enumerate(val_keys):
+                if (xy := series(key)) is None:
+                    continue
+                lines += ax.plot(
+                    *xy,
+                    color="C1",
+                    ls=linestyles[i % len(linestyles)],
+                    marker="o",
+                    ms=3,
+                    label=key,
+                )
+
+            ax.set_xlabel("step")
+            ax.set_ylabel("loss")
+            if all(
+                entry[key] > 0
+                for entry in self.loss_history
+                for key in loss_keys
+                if key in entry
+            ):
+                ax.set_yscale("log")
+            ax.grid(True, which="both", alpha=0.3)
+
+            # Learning rate on a right-hand axis
+            if (xy := series("lr")) is not None:
+                ax_lr = ax.twinx()
+                lines += ax_lr.plot(*xy, color="C3", label="lr")
+                ax_lr.set_ylabel("learning rate", color="C3")
+                ax_lr.tick_params(axis="y", which="both", colors="C3")
+                if all(e["lr"] > 0 for e in self.loss_history if "lr" in e):
+                    ax_lr.set_yscale("log")
+
+            # Epochs on the top axis (steps per epoch is constant)
+            last = self.loss_history[-1]
+            if last["epoch"] > 0 and last["step"] > 0:
+                steps_per_epoch = last["step"] / last["epoch"]
+                ax.secondary_xaxis(
+                    "top",
+                    functions=(
+                        lambda s: s / steps_per_epoch,
+                        lambda e: e * steps_per_epoch,
+                    ),
+                ).set_xlabel("epoch")
+
+            ax.legend(handles=lines)
+            fig.tight_layout()
+
+            output_path = self.output_dir / filename
+            fig.savefig(output_path, dpi=150)
         plt.close(fig)
         print(f"Saved loss plot to {output_path}")
         return output_path
