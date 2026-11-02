@@ -141,7 +141,7 @@ def measure_source(
 
     _, med, std = sigma_clipped_stats(ref)
     sub = ref - med
-    segm = detect_sources(sub, threshold=thresh_sigma * std, npixels=npix)
+    segm = detect_sources(sub, threshold=thresh_sigma * std, n_pixels=npix)
     if segm is None:
         return np.full(phys.shape[0], np.nan), np.nan, np.nan, np.nan
 
@@ -153,16 +153,16 @@ def measure_source(
         idx = int(np.where(cat.labels == lbl)[0][0])
     src = cat[idx]
 
-    smaj = src.semimajor_sigma.value  # px (Gaussian-equiv), not * n_sigma
-    smin = src.semiminor_sigma.value
+    smaj = src.semimajor_axis.value  # px (Gaussian-equiv), not * n_sigma
+    smin = src.semiminor_axis.value
     q = smin / smaj  # axis ratio b/a, scale-free
     orient = src.orientation.to(u.deg).value  # PA in deg, in (-90, 90]
 
-    x0, y0 = float(src.xcentroid), float(src.ycentroid)
+    x0, y0 = float(src.x_centroid), float(src.y_centroid)
     a = n_sigma * smaj
     b = n_sigma * smin
     theta = src.orientation.to(u.rad).value
-    ap = EllipticalAperture((x0, y0), a, b, theta)
+    ap = EllipticalAperture((x0, y0), a, b, theta=theta)
 
     out = np.empty(phys.shape[0])
     for k, band in enumerate(phys):
